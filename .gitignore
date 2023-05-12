@@ -1,1 +1,8 @@
 *.txt
+preprocessed_data/lbfmodel.yaml
+preprocessed_data/preprocessed_inputs.npz
+preprocessed_data/haarcascade_frontalface_alt2.xml
+*.TPS
+*.bmp
+*.xml
+*.yaml
