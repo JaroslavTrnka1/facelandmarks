@@ -6,3 +6,9 @@ preprocessed_data/haarcascade_frontalface_alt2.xml
 *.bmp
 *.xml
 *.yaml
+*.jpg
+/AI_Morphometrics/*
+.ipynb_checkpoints/Face_Landmarking3-checkpoint.ipynb
+.ipynb_checkpoints/Face_Landmarking3-checkpoint.ipynb
+.ipynb_checkpoints/Face_Landmarking3-checkpoint.ipynb
+.ipynb_checkpoints/Face_Landmarking-checkpoint.ipynb
