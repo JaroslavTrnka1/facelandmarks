@@ -1,19 +1,18 @@
 import os
 import cv2
 import numpy as np
-import tqdm
+from tqdm import tqdm
 from landmarks_utils import readtps, MediaPipe_model, LBF_model
 from cropping import crop_face_only
 from config import *
 
 
-def get_sample_groups(path = os.getcwd()):
+def get_sample_groups():
     sample_groups = []
-    for root, dirs, files in os.walk(path + '/AI_Morphometrics', topdown=True):
+    for root, dirs, files in os.walk('./AI_Morphometrics', topdown=True):
         if not dirs:
             sample_groups.append(root)
     return sample_groups
-
 
 
 def prepare_training_landmarks(both_models = BOTH_MODELS):
@@ -87,9 +86,21 @@ def save_preprocessed_data(x_inp, y_inp, path_list, face_detail_coordinates):
     np.savez('preprocessed_data/preprocessed_inputs', x_inp = x_inp, y_inp = y_inp)
     np.savez('preprocessed_data/face_detail_coordinates', fdc = face_detail_coordinates)
     
-    with open("'preprocessed_data/path_list.txt", "w") as pl:
+    with open("preprocessed_data/path_list.txt", "w") as pl:
         for path in path_list:
             pl.write(str(path) +"\n")
 
-           
-save_preprocessed_data(prepare_training_landmarks())
+
+x_inp, y_inp, path_list, face_detail_coordinates = prepare_training_landmarks() 
+
+if not os.path.isfile("preprocessed_data/path_list.txt"):  
+    x_inp, y_inp, path_list, face_detail_coordinates = prepare_training_landmarks()   
+    try:
+        print(x_inp.shape)
+        print(y_inp.shape)
+        print(len(path_list)) 
+        print(face_detail_coordinates.shape) 
+    except Exception as e:
+        print(e)
+        
+    save_preprocessed_data(x_inp, y_inp, path_list, face_detail_coordinates)

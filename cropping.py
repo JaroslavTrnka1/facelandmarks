@@ -43,7 +43,7 @@ def crop_face_only(image):
  
  
 def standard_face_size(image):
-    new_width = 500
+    new_width = STANDARD_IMAGE_WIDTH
     scale = new_width / image.shape[1]
     new_height = int(scale * image.shape[0])
     image = cv2.resize(image, (new_width, new_height), interpolation = cv2.INTER_AREA)

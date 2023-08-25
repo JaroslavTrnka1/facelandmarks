@@ -58,7 +58,7 @@ class CNNFocusing(nn.Module):
 
         self.crop_size = crop_size
 
-    def forward(self, x, image_shape = None):
+    def forward(self, x):
 
         x = F.relu(self.conv1(x))
         x = self.pool1(x)
@@ -91,7 +91,7 @@ class FaceLandmarking(nn.Module):
         self.pretraining_loss = nn.MSELoss()
         self.train_phase = 0
 
-    def forward(self, x, targets, multicrop = None, image_shape = None):
+    def forward(self, x, targets, multicrop = None):
 
         if self.train_phase == 0:
 
@@ -102,7 +102,7 @@ class FaceLandmarking(nn.Module):
 
         elif self.train_phase == 1:
             raw_landmarks, raw_loss = self.raw_projection(x, targets)
-            correction = self.cnn_focusing(multicrop, image_shape)
+            correction = self.cnn_focusing(multicrop)
 
             output = raw_landmarks + correction
             final_loss = self.pretraining_loss(output, targets)
@@ -111,7 +111,7 @@ class FaceLandmarking(nn.Module):
 
         elif self.train_phase == 2:
             raw_landmarks, raw_loss = self.raw_projection(x, targets)
-            correction = self.cnn_focusing(multicrop, image_shape)
+            correction = self.cnn_focusing(multicrop)
 
             ffn_input = torch.cat((raw_landmarks, correction), dim = 1)
             output = self.ffn(ffn_input) + raw_landmarks
@@ -119,7 +119,7 @@ class FaceLandmarking(nn.Module):
 
             return output, final_loss, raw_loss
     
-    # bude třeba předělat na crop face only
+    
     @torch.no_grad()
     def predict(self, image, face_detail = True):
         try:
@@ -135,15 +135,29 @@ class FaceLandmarking(nn.Module):
             
         input_landmarks = torch.from_numpy(input_landmarks.reshape(1,-1)).float().to(DEVICE)
         
-        raw_landmarks, _ = self.raw_projection(input_landmarks)
+        if self.train_phase == 0:
+            output, _ = self.raw_projection(input_landmarks)
         
-        subimage = standard_face_size(subimage)
-        multicrop = make_landmark_crops(raw_landmarks, subimage, crop_size = CROP_SIZE)
+        elif self.train_phase == 1:
+            raw_landmarks, _ = self.raw_projection(input_landmarks)
+            subimage = standard_face_size(subimage)
+            
+            multicrop = make_landmark_crops(raw_landmarks, subimage, crop_size = CROP_SIZE)
+            correction = self.cnn_focusing(multicrop[None,:,:,:], image_shape = subimage.shape)
+
+            output = raw_landmarks + correction
         
-        correction = self.cnn_focusing(multicrop[None,:,:,:], image_shape = subimage.shape)
-        ffn_input = torch.cat((raw_landmarks, correction), dim = 1)
-        
-        output = self.ffn(ffn_input) + raw_landmarks
+        elif self.train_phase == 2:
+            raw_landmarks, _ = self.raw_projection(input_landmarks)
+            
+            subimage = standard_face_size(subimage)
+            multicrop = make_landmark_crops(raw_landmarks, subimage, crop_size = CROP_SIZE)
+            
+            correction = self.cnn_focusing(multicrop[None,:,:,:], image_shape = subimage.shape)
+            ffn_input = torch.cat((raw_landmarks, correction), dim = 1)
+            
+            output = self.ffn(ffn_input) + raw_landmarks
+            
         output = output.cpu().detach().numpy().reshape(-1,2)
         
         # Flipping the axis to have the origin bottom-left

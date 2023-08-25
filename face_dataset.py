@@ -48,6 +48,6 @@ class FaceDataset(Dataset):
             image = standard_face_size(image)
             
             raw_landmarks, _ = self.model.raw_projection(x, None)
-            multicrop = make_landmark_crops(raw_landmarks, image)
+            multicrop = make_landmark_crops(raw_landmarks, image, CROP_SIZE)
 
         return x, y, multicrop
