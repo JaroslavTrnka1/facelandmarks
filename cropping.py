@@ -52,25 +52,29 @@ def standard_face_size(image):
     
 @torch.no_grad()
 def make_landmark_crops(raw_landmarks, image, crop_size):
+    try:
 
-    # Scaling from (0,1) to pixel scale and transposing landmarks
-    raw_landmarks_pix = torch.mul(raw_landmarks.reshape(-1,2), torch.tensor([image.shape[1], image.shape[0]]).to(DEVICE)).permute(1,0)
+        # Scaling from (0,1) to pixel scale and transposing landmarks
+        raw_landmarks_pix = torch.mul(raw_landmarks.reshape(-1,2), torch.tensor([image.shape[1], image.shape[0]]).to(DEVICE)).permute(1,0)
 
-    # Preparing index matrices of all crops
+        # Preparing index matrices of all crops
 
-    crop_range = torch.arange(-crop_size // 2, crop_size // 2)
+        crop_range = torch.arange(-crop_size // 2, crop_size // 2)
 
-    # shape (30,30,2) --> one layer of horizontal indices from -15 to 14, second the same verical
-    crop_matrix = torch.stack([crop_range.tile((crop_size,1)), crop_range[:, None].tile((1,crop_size))], dim = 2).to(DEVICE)
+        # shape (30,30,2) --> one layer of horizontal indices from -15 to 14, second the same verical
+        crop_matrix = torch.stack([crop_range.tile((crop_size,1)), crop_range[:, None].tile((1,crop_size))], dim = 2).to(DEVICE)
 
-    # shape: (x_coor_matrix horizontal, y_coor_matrix vertical, 2, num_landmarks)
-    crop_indices = (raw_landmarks_pix[None, None,:,:] + crop_matrix[:,:,:,None]).type(torch.LongTensor) # float to int for indices
+        # shape: (x_coor_matrix horizontal, y_coor_matrix vertical, 2, num_landmarks)
+        crop_indices = (raw_landmarks_pix[None, None,:,:] + crop_matrix[:,:,:,None]).type(torch.LongTensor) # float to int for indices
 
-    image = torch.tensor(image).to(DEVICE)
-    # Cropping image around raw landmarks
-    sub_image = (image[crop_indices[:,:,1,:], crop_indices[:,:,0,:], :]).clone().detach()
+        image = torch.tensor(image).to(DEVICE)
+        # Cropping image around raw landmarks
+        sub_image = (image[crop_indices[:,:,1,:], crop_indices[:,:,0,:], :]).clone().detach()
 
-    # Final shape (3 for RGB * num_landmarks, x_crop_size, y_crop_size)
-    multicrop = sub_image.reshape(crop_size, crop_size, -1).permute(2,0,1).type(torch.float).to(DEVICE)
+        # Final shape (3 for RGB * num_landmarks, x_crop_size, y_crop_size)
+        multicrop = sub_image.reshape(crop_size, crop_size, -1).permute(2,0,1).type(torch.float).to(DEVICE)
+    
+    except:
+        print(raw_landmarks, image.shape, crop_size)
 
     return multicrop

@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Ellipse, Rectangle
 import urllib.request as urlreq
+import torch
 
 
 def readtps(input, path):
@@ -175,4 +176,51 @@ def display_landmarks(landmarks, img, pixel_scale = False, origin = None, errors
             ax.add_patch(circ2)
 
     plt.show()
+
+
+def get_relative_positions(landmarks):
+    margin_coef = 1.5
     
+    # Calculate the mean absolute position of landmarks
+    centroid = torch.mean(landmarks, axis=-2, keepdim=True)
+
+    # Calculate relative positions by subtracting the mean
+    relative_landmarks = torch.subtract(landmarks, centroid)
+
+    # Calculate the maximum absolute distance from the mean position
+    max_distance = torch.max(torch.abs(relative_landmarks), axis=-2, keepdim = True)[0] * margin_coef
+
+    # Normalize relative positions to the range [0, 1] by dividing by the maximum absolute distance
+    relative_landmarks = torch.div(torch.add(relative_landmarks, max_distance), (2 * max_distance))
+
+    # Calculate a measure of size (maximum absolute distance)
+    size_measure = max_distance
+
+    return relative_landmarks, centroid, size_measure
+
+def get_absolute_positions(relative_landmarks, centroid, size_measure):
+
+    # Scale the relative positions by the size_measure and add the mean position
+    absolute_landmarks = torch.sub(2 * torch.mul(relative_landmarks, size_measure), torch.add(size_measure, -1 * centroid))
+
+    return absolute_landmarks
+
+
+
+# landmarks = torch.tensor([[100, 150], [120, 160], [90, 145], [110, 155]], dtype = torch.float64)
+# relative_landmarks, centroid, size_measure = get_relative_positions(landmarks)
+
+# torch.mul(centroid, torch.tensor([2,3], dtype = int)).type(torch.int)
+
+# import torch
+# a = torch.randn(3,4,4)
+# #torch.flatten(a, start_dim = -2) == a.reshape(3,-1)
+
+# a.unflatten(-1, (-1,2)) == a.reshape(3, 4, 2, 2)
+
+# landmarks = torch.randn(20,50,10,2)
+# get_relative_positions(landmarks)[0].shape
+# relative_landmarks, centroid, size_measure = get_relative_positions(landmarks)
+# get_absolute_positions(relative_landmarks, centroid, size_measure).shape
+
+
