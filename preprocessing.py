@@ -9,7 +9,7 @@ from config import *
 
 def get_sample_groups():
     sample_groups = []
-    for root, dirs, files in os.walk('./AI_Morphometrics', topdown=True):
+    for root, dirs, files in os.walk('./AI_Morphometrics/Turci', topdown=True):
         if not dirs:
             sample_groups.append(root)
     return sample_groups
@@ -90,8 +90,6 @@ def save_preprocessed_data(x_inp, y_inp, path_list, face_detail_coordinates):
         for path in path_list:
             pl.write(str(path) +"\n")
 
-
-x_inp, y_inp, path_list, face_detail_coordinates = prepare_training_landmarks() 
 
 if not os.path.isfile("preprocessed_data/path_list.txt"):  
     x_inp, y_inp, path_list, face_detail_coordinates = prepare_training_landmarks()   
