@@ -6,6 +6,23 @@ import mediapipe as mp
 from config import *
 
 
+def crop_around_centroid(image, centroid, size_measure):
+    
+    subimage_center = torch.mul(centroid, torch.tensor([image.shape[1], image.shape[0]]))
+    subimage_size = torch.mul(size_measure, torch.tensor([image.shape[1], image.shape[0]]))
+
+    subimage_margins = torch.cat([-1 * torch.squeeze(subimage_center - subimage_size), torch.squeeze(subimage_center + subimage_size)])
+    image_margins = torch.tensor([0,0,image.shape[1], image.shape[0]])
+
+    cropping = torch.max(torch.ones(4),image_margins - subimage_margins).type(torch.int)
+    padding = torch.abs(torch.min(torch.zeros(4),image_margins - subimage_margins)).type(torch.int)
+
+    padded_img = cv2.copyMakeBorder(image,padding[1].item(),padding[3].item(),padding[0].item(),padding[2].item(),cv2.BORDER_REPLICATE)
+    subimage = np.ascontiguousarray(padded_img[cropping[1]:-cropping[3], cropping[0]:-cropping[2],:])
+    
+    return subimage
+
+
 def crop_face_only(image):
     # Initialize the face detection module and process the image
     face_detection = mp.solutions.face_detection.FaceDetection()

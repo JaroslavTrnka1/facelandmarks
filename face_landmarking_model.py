@@ -10,16 +10,18 @@ from config import *
 
 
 class RawProjection(nn.Module):
-    def __init__(self, input_dim, output_dim):
+    def __init__(self, input_dim, output_dim, two_layers = True):
         super().__init__()
 
-        self.linear1 = nn.Linear(input_dim, input_dim, bias = True)
-        self.linear2 = nn.Linear(input_dim, output_dim, bias = True)
+        self.linear1 = nn.Linear(input_dim, 2*input_dim, bias = False)
+        self.linear2 = nn.Linear(2*input_dim, output_dim, bias = False)
+        self.two_layers = two_layers
         self.loss_func = nn.MSELoss()
 
     def forward(self, x, targets = None):
 
-        x = self.linear1(x)
+        if self.two_layers:
+            x = self.linear1(x)
         output = self.linear2(x)
 
         if targets == None:
@@ -73,9 +75,9 @@ class CNNFocusing(nn.Module):
         return output
     
 class FaceLandmarking(nn.Module):
-    def __init__(self):
+    def __init__(self, two_layers = True):
         super().__init__()
-        self.raw_projection = RawProjection(956, 144)
+        self.raw_projection = RawProjection(956, 144, two_layers)
         self.cnn_focusing = CNNFocusing(crop_size = CROP_SIZE)
 
         self.ffn = nn.Sequential(
@@ -94,8 +96,8 @@ class FaceLandmarking(nn.Module):
         if self.train_phase == 0:
             
             output, _ = self.raw_projection(x)
-            abs_landmarks = get_absolute_positions(output.unflatten(-1, (-1, 2)), centroid, size_measure)
-            output = torch.flatten(abs_landmarks, start_dim = -2)
+            # abs_landmarks = get_absolute_positions(output.unflatten(-1, (-1, 2)), centroid, size_measure)
+            # output = torch.flatten(abs_landmarks, start_dim = -2)
             final_loss = self.pretraining_loss(output, targets)
 
             return output, final_loss, None
@@ -103,15 +105,16 @@ class FaceLandmarking(nn.Module):
         elif self.train_phase == 1:
             raw_landmarks, _ = self.raw_projection(x)
             
-            abs_raw_landmarks = get_absolute_positions(raw_landmarks.unflatten(-1, (-1, 2)), centroid, size_measure)
-            abs_raw_landmarks = torch.flatten(abs_raw_landmarks, start_dim = -2)
-            raw_loss = self.pretraining_loss(abs_raw_landmarks, targets)
+            # abs_raw_landmarks = get_absolute_positions(raw_landmarks.unflatten(-1, (-1, 2)), centroid, size_measure)
+            # abs_raw_landmarks = torch.flatten(abs_raw_landmarks, start_dim = -2)
+            # raw_loss = self.pretraining_loss(abs_raw_landmarks, targets)
+            raw_loss = self.pretraining_loss(raw_landmarks, targets)
             
             correction = self.cnn_focusing(multicrop)
 
             output = raw_landmarks + correction
-            abs_landmarks = get_absolute_positions(output.unflatten(-1, (-1, 2)), centroid, size_measure)
-            output = torch.flatten(abs_landmarks, start_dim = -2)
+            # abs_landmarks = get_absolute_positions(output.unflatten(-1, (-1, 2)), centroid, size_measure)
+            # output = torch.flatten(abs_landmarks, start_dim = -2)
             
             final_loss = self.pretraining_loss(output, targets)
 
@@ -123,8 +126,8 @@ class FaceLandmarking(nn.Module):
 
             ffn_input = torch.cat((raw_landmarks, correction), dim = 1)
             output = self.ffn(ffn_input) + raw_landmarks
-            abs_landmarks = get_absolute_positions(output.unflatten(-1, (-1, 2)), centroid, size_measure)
-            output = torch.flatten(abs_landmarks, start_dim = -2)
+            # abs_landmarks = get_absolute_positions(output.unflatten(-1, (-1, 2)), centroid, size_measure)
+            # output = torch.flatten(abs_landmarks, start_dim = -2)
             
             final_loss = self.pretraining_loss(output, targets)
 
@@ -132,34 +135,38 @@ class FaceLandmarking(nn.Module):
     
     @torch.no_grad()
     def predict(self, image, face_detail = True):
-        try:
-            subimage, xmin, ymin, xmax, ymax = crop_face_only(image)
-        except:
-            print('No face has been found in the image!')
-            return None
+        
+        # TODO: Ošetřit multiple images
         
         if BOTH_MODELS:
-            input_landmarks = np.concatenate((LBF_model(subimage), MediaPipe_model(subimage)), axis = 0)
+            input_landmarks = np.concatenate((LBF_model(image), MediaPipe_model(image)), axis = 0)
         else:
-            input_landmarks = MediaPipe_model(subimage)
+            input_landmarks = MediaPipe_model(image)
             
-        input_landmarks = torch.from_numpy(input_landmarks.reshape(1,-1)).float().to(DEVICE)
+        input_landmarks = torch.from_numpy(input_landmarks).float().to(DEVICE)
+        relative_landmarks, centroid, size_measure = get_relative_positions(input_landmarks)
+        relative_landmarks = relative_landmarks.reshape(1,-1)
         
         if self.train_phase == 0:
-            output, _ = self.raw_projection(input_landmarks)
-        
+            output, _ = self.raw_projection(relative_landmarks)
+            subimage = crop_around_centroid(image, centroid, size_measure)
+            subimage = standard_face_size(subimage)   
+                 
         elif self.train_phase == 1:
-            raw_landmarks, _ = self.raw_projection(input_landmarks)
-            subimage = standard_face_size(subimage)
+            raw_landmarks, _ = self.raw_projection(relative_landmarks)
             
+            subimage = crop_around_centroid(image, centroid, size_measure)
+            subimage = standard_face_size(subimage)
             multicrop = make_landmark_crops(raw_landmarks, subimage, crop_size = CROP_SIZE)
+            
             correction = self.cnn_focusing(multicrop[None,:,:,:], image_shape = subimage.shape)
 
             output = raw_landmarks + correction
         
         elif self.train_phase == 2:
-            raw_landmarks, _ = self.raw_projection(input_landmarks)
+            raw_landmarks, _ = self.raw_projection(relative_landmarks)
             
+            subimage = crop_around_centroid(image, centroid, size_measure)
             subimage = standard_face_size(subimage)
             multicrop = make_landmark_crops(raw_landmarks, subimage, crop_size = CROP_SIZE)
             
@@ -167,18 +174,22 @@ class FaceLandmarking(nn.Module):
             ffn_input = torch.cat((raw_landmarks, correction), dim = 1)
             
             output = self.ffn(ffn_input) + raw_landmarks
-            
-        output = output.cpu().detach().numpy().reshape(-1,2)
+        
+        output = output.unflatten(-1, (-1, 2)).cpu().detach()
+        abs_output = get_absolute_positions(output, centroid, size_measure)    
+        abs_output = abs_output.cpu().detach().numpy()
         
         # Flipping the axis to have the origin bottom-left
+        output = output.numpy()
         output[:,1] = 1 - output[:,1]
+        abs_output[:,1] = 1 - abs_output[:,1]
         
         # Pixel dimension
-        output = np.multiply(output, (subimage.shape[1], subimage.shape[0]))
+        output = np.multiply(output, (subimage.shape[1], subimage.shape[0])).astype(np.int32)
+        abs_output = np.multiply(abs_output, (image.shape[1], image.shape[0])).astype(np.int32)
         
         if face_detail:
-            return output, subimage
+            return output, relative_landmarks, subimage
         
         else:
-            output = np.add(output, (xmin, image.shape[0] - ymax))
-            return output, image
+            return abs_output, input_landmarks, image

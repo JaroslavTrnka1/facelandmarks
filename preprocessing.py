@@ -9,7 +9,7 @@ from config import *
 
 def get_sample_groups():
     sample_groups = []
-    for root, dirs, files in os.walk('./AI_Morphometrics/Turci', topdown=True):
+    for root, dirs, files in os.walk('./AI_Morphometrics', topdown=True):
         if not dirs:
             sample_groups.append(root)
     return sample_groups
@@ -34,12 +34,7 @@ def prepare_training_landmarks(both_models = BOTH_MODELS):
 
                 for idx in range(len(tps['im'])):
                     true_landmarks = tps['coords'][:, :, idx]
-                    
-                    # As the source true landmarks have y-origin on the bottom of picture
-                    # (unlike MediaPipe model)
-                    # we have to flip their y-axis
-                    true_landmarks[:,1] = 1 - true_landmarks[:,1]
-                    
+                                      
                     try:
                         
                         img_path = group + '/' + tps['im'][idx]
@@ -48,6 +43,10 @@ def prepare_training_landmarks(both_models = BOTH_MODELS):
                         
                         # scaling from pixel to (0,1)
                         true_landmarks = np.divide(true_landmarks, (image.shape[1], image.shape[0]))
+                        # As the source true landmarks have y-origin on the bottom of picture
+                        # (unlike MediaPipe model)
+                        # we have to flip their y-axis
+                        true_landmarks[:,1] = 1 - true_landmarks[:,1]
 
                         # We crop only face detail for a better precision
                         # and accomodate landmark coordinates to cropped subimage

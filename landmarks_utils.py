@@ -179,7 +179,7 @@ def display_landmarks(landmarks, img, pixel_scale = False, origin = None, errors
 
 
 def get_relative_positions(landmarks):
-    margin_coef = 1.5
+    margin_coef = torch.tensor([1.7, 1.85])
     
     # Calculate the mean absolute position of landmarks
     centroid = torch.mean(landmarks, axis=-2, keepdim=True)
@@ -188,7 +188,7 @@ def get_relative_positions(landmarks):
     relative_landmarks = torch.subtract(landmarks, centroid)
 
     # Calculate the maximum absolute distance from the mean position
-    max_distance = torch.max(torch.abs(relative_landmarks), axis=-2, keepdim = True)[0] * margin_coef
+    max_distance = torch.mul(torch.max(torch.abs(relative_landmarks), axis=-2, keepdim = True)[0], margin_coef)
 
     # Normalize relative positions to the range [0, 1] by dividing by the maximum absolute distance
     relative_landmarks = torch.div(torch.add(relative_landmarks, max_distance), (2 * max_distance))
@@ -197,6 +197,13 @@ def get_relative_positions(landmarks):
     size_measure = max_distance
 
     return relative_landmarks, centroid, size_measure
+
+def fit_to_relative_centroid(landmarks, centroid, size_measure):
+    
+    relative_landmarks = torch.subtract(landmarks, centroid)
+    relative_landmarks = torch.div(torch.add(relative_landmarks, size_measure), (2 * size_measure))
+    
+    return relative_landmarks
 
 def get_absolute_positions(relative_landmarks, centroid, size_measure):
 
