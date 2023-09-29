@@ -77,4 +77,4 @@ class FaceDataset(Dataset):
             raw_landmarks, _ = self.model.raw_projection(x)
             multicrop = make_landmark_crops(raw_landmarks, subimage, CROP_SIZE)
 
-        return x, y, centroid, size_measure, multicrop
+        return x, y, multicrop

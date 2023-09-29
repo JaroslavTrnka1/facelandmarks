@@ -10,18 +10,16 @@ from config import *
 
 
 class RawProjection(nn.Module):
-    def __init__(self, input_dim, output_dim, two_layers = True):
+    def __init__(self, input_dim, output_dim):
         super().__init__()
 
         self.linear1 = nn.Linear(input_dim, 2*input_dim, bias = False)
         self.linear2 = nn.Linear(2*input_dim, output_dim, bias = False)
-        self.two_layers = two_layers
         self.loss_func = nn.MSELoss()
 
     def forward(self, x, targets = None):
 
-        if self.two_layers:
-            x = self.linear1(x)
+        x = self.linear1(x)
         output = self.linear2(x)
 
         if targets == None:
@@ -30,6 +28,52 @@ class RawProjection(nn.Module):
             loss = self.loss_func(output, targets)
 
         return output, loss
+    
+class EnsembleProjection(nn.Module):
+    def __init__(self, input_dim, output_dim, num_projectors):
+        super().__init__()
+        
+        self.num_projectors = num_projectors
+        self.ensemble = nn.ModuleList()
+        for i in range(num_projectors):
+            projector = RawProjection(input_dim, output_dim)
+            self.ensemble.append(projector)
+    
+    def forward(self, x, targets = None):
+        # x and targets should be a list of tensors
+        # předělat pomocí torch stack? Ensemble of datasets?
+        
+        outputs =  []
+        losses = []
+        
+        if type(x) == list:
+            pass
+        else:
+            x = [x] * self.num_projectors
+            
+        if type(targets) == list:
+            pass
+        else:
+            targets = [targets] * self.num_projectors
+        
+        for i, projector in enumerate(self.ensemble):
+            output, loss = projector(x[i], targets[i])
+            outputs.append(output)
+            losses.append(loss)
+        
+        return outputs, losses
+    
+    def predict(self, x):
+        
+        outputs = []
+        
+        for projector in self.ensemble:
+            output, loss = projector(x)
+            outputs.append(output)
+
+        output = torch.mean(torch.stack(outputs, dim=0), dim=0)
+        
+        return output
     
 class CNNFocusing(nn.Module):
     def __init__(self, crop_size):
@@ -57,7 +101,7 @@ class CNNFocusing(nn.Module):
         self.linear2 = nn.Linear(linear2_mask.shape[0], linear2_mask.shape[1])
 
         self.crop_size = crop_size
-
+    
     def forward(self, x):
 
         x = F.relu(self.conv1(x))
@@ -75,9 +119,16 @@ class CNNFocusing(nn.Module):
         return output
     
 class FaceLandmarking(nn.Module):
-    def __init__(self, two_layers = True):
+    def __init__(self, projectors = 10):
         super().__init__()
-        self.raw_projection = RawProjection(956, 144, two_layers)
+        
+        self.ensemble = EnsembleProjection(956, 144, projectors)
+        # self.ensemble = []
+        
+        # for i in range(10):
+        #     projector = RawProjection(956, 144)
+        #     self.ensemble.append(projector)
+
         self.cnn_focusing = CNNFocusing(crop_size = CROP_SIZE)
 
         self.ffn = nn.Sequential(
@@ -87,28 +138,54 @@ class FaceLandmarking(nn.Module):
           #nn.ReLU()
         )
 
-        self.final_loss = nn.L1Loss()
-        self.pretraining_loss = nn.MSELoss()
+        self.loss_function = nn.MSELoss()
         self.train_phase = 0
 
-    def forward(self, x, targets, centroid, size_measure, multicrop = None):
+    # def forward_ensemble(self, x, targets = None):
+        
+    #     outputs =  []
+    #     losses = []
+        
+    #     for i, projector in enumerate(self.ensemble):
+    #         output, loss = projector(x[i], targets[i])
+    #         outputs.append(output)
+    #         losses.append(loss)
+        
+    #     return outputs, losses
+
+
+    # def predict_ensemble(self, x):
+        
+    #     outputs = []
+        
+    #     for projector in enumerate(self.ensemble):
+    #         output, loss = projector(x)
+    #         outputs.append(output)
+
+    #     output = torch.mean(torch.stack(outputs, dim=0), dim=0)
+        
+    #     return output
+
+
+    def forward(self, x, targets, multicrop = None):
 
         if self.train_phase == 0:
             
-            output, _ = self.raw_projection(x)
+            outputs, losses = self.ensemble(x, targets)
+            # Loss_function už pouze na relative targets
             # abs_landmarks = get_absolute_positions(output.unflatten(-1, (-1, 2)), centroid, size_measure)
             # output = torch.flatten(abs_landmarks, start_dim = -2)
-            final_loss = self.pretraining_loss(output, targets)
+            final_loss = torch.sum(torch.stack(losses, dim=0), dim=0)
 
-            return output, final_loss, None
+            return outputs, final_loss, None
 
         elif self.train_phase == 1:
-            raw_landmarks, _ = self.raw_projection(x)
+            raw_landmarks = self.ensemble.predict(x)
             
             # abs_raw_landmarks = get_absolute_positions(raw_landmarks.unflatten(-1, (-1, 2)), centroid, size_measure)
             # abs_raw_landmarks = torch.flatten(abs_raw_landmarks, start_dim = -2)
             # raw_loss = self.pretraining_loss(abs_raw_landmarks, targets)
-            raw_loss = self.pretraining_loss(raw_landmarks, targets)
+            raw_loss = self.loss_function(raw_landmarks, targets)
             
             correction = self.cnn_focusing(multicrop)
 
@@ -116,12 +193,12 @@ class FaceLandmarking(nn.Module):
             # abs_landmarks = get_absolute_positions(output.unflatten(-1, (-1, 2)), centroid, size_measure)
             # output = torch.flatten(abs_landmarks, start_dim = -2)
             
-            final_loss = self.pretraining_loss(output, targets)
+            final_loss = self.loss_function(output, targets)
 
             return output, final_loss, raw_loss
 
         elif self.train_phase >= 2:
-            raw_landmarks, _ = self.raw_projection(x)
+            raw_landmarks = self.ensemble.predict(x)
             correction = self.cnn_focusing(multicrop)
 
             ffn_input = torch.cat((raw_landmarks, correction), dim = 1)
@@ -129,7 +206,7 @@ class FaceLandmarking(nn.Module):
             # abs_landmarks = get_absolute_positions(output.unflatten(-1, (-1, 2)), centroid, size_measure)
             # output = torch.flatten(abs_landmarks, start_dim = -2)
             
-            final_loss = self.pretraining_loss(output, targets)
+            final_loss = self.loss_function(output, targets)
 
             return output, final_loss, None    
     
@@ -148,12 +225,12 @@ class FaceLandmarking(nn.Module):
         relative_landmarks = relative_landmarks.reshape(1,-1)
         
         if self.train_phase == 0:
-            output, _ = self.raw_projection(relative_landmarks)
+            output = self.ensemble.predict(relative_landmarks)
             subimage = crop_around_centroid(image, centroid, size_measure)
             subimage = standard_face_size(subimage)   
                  
         elif self.train_phase == 1:
-            raw_landmarks, _ = self.raw_projection(relative_landmarks)
+            raw_landmarks = self.ensemble.predict(relative_landmarks)
             
             subimage = crop_around_centroid(image, centroid, size_measure)
             subimage = standard_face_size(subimage)
@@ -164,7 +241,7 @@ class FaceLandmarking(nn.Module):
             output = raw_landmarks + correction
         
         elif self.train_phase == 2:
-            raw_landmarks, _ = self.raw_projection(relative_landmarks)
+            raw_landmarks = self.ensemble.predict(relative_landmarks)
             
             subimage = crop_around_centroid(image, centroid, size_measure)
             subimage = standard_face_size(subimage)
@@ -181,8 +258,8 @@ class FaceLandmarking(nn.Module):
         
         # Flipping the axis to have the origin bottom-left
         output = output.numpy()
-        output[:,1] = 1 - output[:,1]
-        abs_output[:,1] = 1 - abs_output[:,1]
+        # output[:,1] = 1 - output[:,1]
+        # abs_output[:,1] = 1 - abs_output[:,1]
         
         # Pixel dimension
         output = np.multiply(output, (subimage.shape[1], subimage.shape[0])).astype(np.int32)
