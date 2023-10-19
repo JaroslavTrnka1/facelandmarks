@@ -212,7 +212,48 @@ def get_absolute_positions(relative_landmarks, centroid, size_measure):
 
     return absolute_landmarks
 
+def get_face_angle(landmarks, image_shape):
+    forehead = (landmarks[151, 0] * image_shape[1], landmarks[151, 1] * image_shape[0])
+    chin = (landmarks[152, 0] * image_shape[1], landmarks[152, 1] * image_shape[0])
+    angle_rad = np.arctan2(chin[0] - forehead[0] , chin[1] - forehead[1]) * -1
+    angle_deg = np.degrees(angle_rad)
+    return angle_deg.item()
 
+def rotate_landmarks(angle_deg, landmarks, image_shape):
+    center = torch.tensor([image_shape[1]//2, image_shape[0]//2])
+    pixel_landmarks = torch.mul(landmarks, torch.tensor([image_shape[1], image_shape[0]]))
+    rotation_matrix = cv2.getRotationMatrix2D((center[0].item(), center[1].item()), angle_deg, 1.0)
+
+    centered_landmarks = pixel_landmarks - center
+    centered_landmarks = torch.matmul(centered_landmarks, torch.tensor(rotation_matrix[:,:2], dtype=torch.float32).T)
+
+    rotated_landmarks = centered_landmarks + center
+    rotated_landmarks = torch.div(rotated_landmarks, torch.tensor([image_shape[1], image_shape[0]]))
+    return rotated_landmarks
+
+def display_parent_landmarks(projection_mask, img_idx, landmark_idx):
+    preprocessed_inputs = np.load('preprocessed_data/preprocessed_inputs.npz')
+    inputs = preprocessed_inputs['x_inp']
+    targets = preprocessed_inputs['y_inp']
+    path_list = []
+    with open("preprocessed_data/path_list.txt", "r") as pl:
+        for path in pl:
+            path_list.append(path.strip())
+            
+    idx = img_idx
+    img = cv2.imread(path_list[idx])
+
+    inp = inputs[idx,:]
+    targ = targets[idx,:].reshape(-1,2)
+
+    landmark_idx = landmark_idx
+    target_landmark = targ[landmark_idx:landmark_idx+1, :]
+
+    mask = projection_mask[2 * landmark_idx,:]
+    input_landmarks = inp[mask].reshape(-1,2)
+
+    display_landmarks(target_landmark, img, pixel_scale=False, origin='upper_left')
+    display_landmarks(input_landmarks, img, pixel_scale=False, origin='upper_left')
 
 # landmarks = torch.tensor([[100, 150], [120, 160], [90, 145], [110, 155]], dtype = torch.float64)
 # relative_landmarks, centroid, size_measure = get_relative_positions(landmarks)

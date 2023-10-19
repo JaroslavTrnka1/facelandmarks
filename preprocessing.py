@@ -2,7 +2,7 @@ import os
 import cv2
 import numpy as np
 from tqdm import tqdm
-from landmarks_utils import readtps, MediaPipe_model, LBF_model
+from landmarks_utils import readtps, MediaPipe_model, LBF_model, get_face_angle
 from cropping import crop_face_only
 from config import *
 
@@ -25,6 +25,7 @@ def prepare_training_landmarks(both_models = BOTH_MODELS):
     face_detail_coordinates = np.empty((0, 4))
     groups = get_sample_groups()
     path_list = []
+    angles = np.empty(0)
     
     for group in tqdm(groups):
 
@@ -64,9 +65,11 @@ def prepare_training_landmarks(both_models = BOTH_MODELS):
                         # cv2 returns upper left axis origin by default - in this form the image is processed by both models
                     
                         if both_models:
-                            input_landmarks = np.concatenate((LBF_model(image), MediaPipe_model(image)), axis = 0)
+                            input_landmarks = np.concatenate((MediaPipe_model(image), LBF_model(image)), axis = 0)
                         else:
                             input_landmarks = MediaPipe_model(image)
+                        
+                        angle = get_face_angle(input_landmarks, image.shape)
                         
                         input_landmarks = input_landmarks.reshape(1,-1)
                         x = np.concatenate((x, input_landmarks), axis = 0)
@@ -74,33 +77,37 @@ def prepare_training_landmarks(both_models = BOTH_MODELS):
                         true_landmarks = true_landmarks.reshape(1,-1)
                         y_true = np.concatenate((y_true, true_landmarks), axis = 0)
                         
+                        angles = np.concatenate((angles, np.array([angle])))
+                        
                         path_list.append(img_path)
                         
-                    except:
+                    except Exception as e:
                         # Wrong image wasn't accepted into preprocessed data
-                        print(f"Preprocessing went wrong in image: {img_path}.")
+                        print(f"Preprocessing went wrong in image: {img_path}, error: {e}.")
 
-    return x, y_true, path_list
+    return x, y_true, path_list, angles
 
 
 
-def save_preprocessed_data(x_inp, y_inp, path_list):
+def save_preprocessed_data(x_inp, y_inp, path_list, angles):
     if not  os.path.exists('preprocessed_data'):
         os.mkdir('preprocessed_data')
     np.savez('preprocessed_data/preprocessed_inputs', x_inp = x_inp, y_inp = y_inp)
+    np.savez('preprocessed_data/angles', angles = angles)
     
     with open("preprocessed_data/path_list.txt", "w") as pl:
         for path in path_list:
             pl.write(str(path) +"\n")
 
 
-if not os.path.isfile("preprocessed_data/path_list.txt"):  
-    x_inp, y_inp, path_list = prepare_training_landmarks()   
-    try:
-        print(x_inp.shape)
-        print(y_inp.shape)
-        print(len(path_list)) 
-    except Exception as e:
-        print(e)
+# if not os.path.isfile("preprocessed_data/path_list.txt"):  
+#     x_inp, y_inp, path_list, angles = prepare_training_landmarks()   
+#     try:
+#         print(x_inp.shape)
+#         print(y_inp.shape)
+#         print(len(path_list)) 
+#         print(angles.shape)
+#     except Exception as e:
+#         print(e)
         
-    save_preprocessed_data(x_inp, y_inp, path_list)
+#     save_preprocessed_data(x_inp, y_inp, path_list, angles)

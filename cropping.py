@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import cv2
 import mediapipe as mp
-
+import imagesize
 from config import *
 
 
@@ -66,6 +66,19 @@ def standard_face_size(image):
     image = cv2.resize(image, (new_width, new_height), interpolation = cv2.INTER_AREA)
     return image
 
+def rotate_image(angle_deg, image):
+    center = (image.shape[1] // 2, image.shape[0] // 2)
+    rotation_matrix = cv2.getRotationMatrix2D(center, angle_deg, 1.0)
+    rotated_image = cv2.warpAffine(image, rotation_matrix, (image.shape[1], image.shape[0]))
+    return rotated_image
+
+def get_subimage_shape(image_path, size_measure):
+    width, height = imagesize.get(image_path)
+    subimage_size = 2*torch.mul(size_measure, torch.tensor([width, height])).squeeze()
+    new_width = STANDARD_IMAGE_WIDTH
+    scale = new_width / subimage_size[0]
+    new_height = int(scale * subimage_size[1])
+    return torch.tensor([new_height, new_width])
     
 @torch.no_grad()
 def make_landmark_crops(raw_landmarks, image, crop_size):
@@ -75,7 +88,6 @@ def make_landmark_crops(raw_landmarks, image, crop_size):
         raw_landmarks_pix = torch.mul(raw_landmarks.reshape(-1,2), torch.tensor([image.shape[1], image.shape[0]]).to(DEVICE)).permute(1,0)
 
         # Preparing index matrices of all crops
-
         crop_range = torch.arange(-crop_size // 2, crop_size // 2)
 
         # shape (30,30,2) --> one layer of horizontal indices from -15 to 14, second the same verical
