@@ -67,31 +67,32 @@ class FaceDataset(Dataset):
         y = torch.tensor(self.y_true[idx,:], dtype = torch.float).to(DEVICE)
         img_path = self.path_list[idx]
         
+        relative_landmarks, centroid, size_measure = get_relative_positions(x.reshape(-1,2))
+        relative_targets = fit_to_relative_centroid(y.reshape(-1,2), centroid, size_measure)
+        subimage_shape = get_subimage_shape(img_path, size_measure)
+        
         if self.rotate:
             angle = self.angles[idx]
-        else:
-            angle = 0
-               
-        relative_landmarks, centroid, size_measure = get_relative_positions(x.reshape(-1,2))
-        subimage_shape = get_subimage_shape(img_path, size_measure)
-        rotated_landmarks = rotate_landmarks(angle, relative_landmarks, subimage_shape)
-        x = rotated_landmarks.reshape(x.shape)
-        
-        relative_targets = fit_to_relative_centroid(y.reshape(-1,2), centroid, size_measure)
-        rotated_targets = rotate_landmarks(angle, relative_targets, subimage_shape)
-        y = rotated_targets.reshape(y.shape)
+            relative_landmarks = rotate_landmarks(angle, relative_landmarks, subimage_shape)
+            relative_targets = rotate_landmarks(angle, relative_targets, subimage_shape)
+            
+        x = relative_landmarks.reshape(x.shape)
+        y = relative_targets.reshape(y.shape)
         #subimage = 0
 
         if self.pretraining:
             multicrop = 0
+            #subimage = 0
 
         else:
             image = cv2.imread(img_path)
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            
+
             subimage = crop_around_centroid(image, centroid, size_measure)
             subimage = standard_face_size(subimage)
-            subimage = rotate_image(angle, subimage)
+            
+            if self.rotate:
+                subimage = rotate_image(angle, subimage)
             
             raw_landmarks = self.model.ensemble.predict(x)
             multicrop = make_landmark_crops(raw_landmarks, subimage, CROP_SIZE)

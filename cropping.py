@@ -7,15 +7,16 @@ from config import *
 
 
 def crop_around_centroid(image, centroid, size_measure):
-    
-    subimage_center = torch.mul(centroid, torch.tensor([image.shape[1], image.shape[0]]))
-    subimage_size = torch.mul(size_measure, torch.tensor([image.shape[1], image.shape[0]]))
+   
+    subimage_center = torch.mul(centroid, torch.tensor([image.shape[1], image.shape[0]]).to(DEVICE))
+    subimage_size = torch.mul(size_measure, torch.tensor([image.shape[1], image.shape[0]]).to(DEVICE))
+    subimage_size[0, 1] = subimage_size[0, 0] * 1.2
 
     subimage_margins = torch.cat([-1 * torch.squeeze(subimage_center - subimage_size), torch.squeeze(subimage_center + subimage_size)])
-    image_margins = torch.tensor([0,0,image.shape[1], image.shape[0]])
+    image_margins = torch.tensor([0,0,image.shape[1], image.shape[0]]).to(DEVICE)
 
-    cropping = torch.max(torch.ones(4),image_margins - subimage_margins).type(torch.int)
-    padding = torch.abs(torch.min(torch.zeros(4),image_margins - subimage_margins)).type(torch.int)
+    cropping = torch.max(torch.ones(4).to(DEVICE),image_margins - subimage_margins).type(torch.int)
+    padding = torch.abs(torch.min(torch.zeros(4).to(DEVICE),image_margins - subimage_margins)).type(torch.int)
 
     padded_img = cv2.copyMakeBorder(image,padding[1].item(),padding[3].item(),padding[0].item(),padding[2].item(),cv2.BORDER_REPLICATE)
     subimage = np.ascontiguousarray(padded_img[cropping[1]:-cropping[3], cropping[0]:-cropping[2],:])
@@ -23,40 +24,40 @@ def crop_around_centroid(image, centroid, size_measure):
     return subimage
 
 
-def crop_face_only(image):
-    # Initialize the face detection module and process the image
-    face_detection = mp.solutions.face_detection.FaceDetection()
-    results = face_detection.process(image)
+# def crop_face_only(image):
+#     # Initialize the face detection module and process the image
+#     face_detection = mp.solutions.face_detection.FaceDetection()
+#     results = face_detection.process(image)
     
-    # Check if any faces were detected
-    if results.detections:
+#     # Check if any faces were detected
+#     if results.detections:
         
-        for detection in results.detections:
-            # Extract the bounding box coordinates
-            bbox = detection.location_data.relative_bounding_box
-            image_height, image_width, _ = image.shape
+#         for detection in results.detections:
+#             # Extract the bounding box coordinates
+#             bbox = detection.location_data.relative_bounding_box
+#             image_height, image_width, _ = image.shape
             
-            # accomodation of the box size
-            size_coef = 1.7
+#             # accomodation of the box size
+#             size_coef = 1.7
             
-            width = int(bbox.width * image_width * size_coef)
-            height = int(bbox.height * image_height * size_coef)
+#             width = int(bbox.width * image_width * size_coef)
+#             height = int(bbox.height * image_height * size_coef)
             
-            xmin = int(bbox.xmin * image_width - (width/size_coef) * (size_coef - 1)/2)
-            ymin = int(bbox.ymin * image_height - (height/size_coef) * (size_coef - 1)/1.3)
+#             xmin = int(bbox.xmin * image_width - (width/size_coef) * (size_coef - 1)/2)
+#             ymin = int(bbox.ymin * image_height - (height/size_coef) * (size_coef - 1)/1.3)
             
-            xmax = min(xmin + width, image_width)
-            ymax = min(ymin + height, image_height)
+#             xmax = min(xmin + width, image_width)
+#             ymax = min(ymin + height, image_height)
             
-            xmin = max(0, xmin)
-            ymin = max(0, ymin)
+#             xmin = max(0, xmin)
+#             ymin = max(0, ymin)
             
-            subimage = np.ascontiguousarray(image[ymin:ymax, xmin:xmax, :])
+#             subimage = np.ascontiguousarray(image[ymin:ymax, xmin:xmax, :])
     
-        return subimage, xmin, ymin, xmax, ymax
+#         return subimage, xmin, ymin, xmax, ymax
     
-    else:
-        return None 
+#     else:
+#         return None 
  
  
 def standard_face_size(image):
@@ -74,10 +75,11 @@ def rotate_image(angle_deg, image):
 
 def get_subimage_shape(image_path, size_measure):
     width, height = imagesize.get(image_path)
-    subimage_size = 2*torch.mul(size_measure, torch.tensor([width, height])).squeeze()
+    subimage_size = 2*torch.mul(size_measure, torch.tensor([width, height]).to(DEVICE)).squeeze()
     new_width = STANDARD_IMAGE_WIDTH
     scale = new_width / subimage_size[0]
     new_height = int(scale * subimage_size[1])
+    # new_height = 600
     return torch.tensor([new_height, new_width])
     
 @torch.no_grad()

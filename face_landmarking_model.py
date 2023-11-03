@@ -1,3 +1,4 @@
+from time import time
 import numpy as np
 import torch
 import torch.nn as nn
@@ -77,8 +78,79 @@ class EnsembleProjection(nn.Module):
         
         return output
     
+    
+# class MiniCNN(nn.Module):
+#     def __init__(self, crop_size, hidden_per_lmark = 10):
+#         super().__init__()
+
+#         self.conv1 = nn.Conv2d(3, 3, 3, stride = 1, padding = 'same', padding_mode = 'replicate')
+#         self.conv2 = nn.Conv2d(3, 6, 3, stride = 1, padding = 'same', padding_mode = 'replicate')
+        
+#         pool = 2
+#         self.pool1 = nn.MaxPool2d((pool,pool))
+#         self.pool2 = nn.MaxPool2d(3)
+
+#         ch_per_lmark = self.conv2.weight.shape[0]
+#         linear_input_dim = int((crop_size/pool)**2 * ch_per_lmark)
+        
+#         self.linear1 = nn.Linear(linear_input_dim, hidden_per_lmark)
+#         self.linear2 = nn.Linear(hidden_per_lmark, 2)
+        
+#     def forward(self, x):
+
+#         x = F.relu(self.conv1(x))
+#         x = self.pool1(x)
+#         #print(f"Shape after 1st pooling: {x.shape}")
+#         x = F.relu(self.conv2(x))
+#         #print(f"Shape after 2nd cnn: {x.shape}")
+#         x = torch.flatten(x, 1)
+#         #print(f"Shape after flattening: {x.shape}")
+
+#         x = self.linear1(x)
+#         output = self.linear2(x)
+
+#         return output
+    
+# class CNNForlooping(nn.Module):
+#     def __init__(self, crop_size, hidden_per_lmark=10):
+#         super().__init__()
+        
+#         self.num_cnn = 72
+#         self.multicnn = nn.ModuleList()
+#         for i in range(self.num_cnn):
+#             landmark_cnn = MiniCNN(crop_size, hidden_per_lmark)
+#             self.multicnn.append(landmark_cnn)
+        
+#         self.crop_size = crop_size
+#         self.grid = torch.stack(
+#             torch.meshgrid(
+#                 torch.arange(-crop_size//2, crop_size//2),
+#                 torch.arange(-crop_size//2, crop_size//2)
+#             )
+#             , dim = 0).reshape(2,-1).unsqueeze(0).type(torch.int)
+
+#     def forward(self, x, images):
+        
+#         # input x as a tensor of 144 landmark coordinates
+#         # Pozor! images budou taky v batch!!2, takže shape: (batch, channels, height, width)
+#         outputs = torch.empty(images.shape[0], 144)
+#         images = images.clone().detach().permute(0,3,1,2)
+        
+#         for landmark, minicnn in enumerate(self.multicnn):
+#             # shape (batch, 2)
+#             central_pixels = x[:,landmark*2 : landmark*2+2] * torch.tensor([images.shape[-1], images.shape[-2]]).type(torch.int).to(DEVICE)
+#             # shape (batch, 2, crop_size**2)
+#             crop_field = central_pixels.unsqueeze(2) + self.grid
+#             crop_field = crop_field.type(torch.int)
+#             inbatch_idx = torch.arange(images.shape[0]).type(torch.int)
+#             patches = images[:,:,crop_field[:,1,:], crop_field[:,0,:]][inbatch_idx,:,inbatch_idx,...].reshape(-1,3,self.crop_size,self.crop_size).type(torch.float)
+#             output = minicnn(patches)
+#             outputs[:,landmark*2 : landmark*2+2] = output
+
+#         return outputs
+
 class CNNFocusing(nn.Module):
-    def __init__(self, crop_size):
+    def __init__(self, crop_size, hidden_per_lmark=10):
         super().__init__()
 
         self.conv1 = nn.Conv2d(216, 216, 3, stride = 1, groups = 72, padding = 'same', padding_mode = 'replicate')
@@ -87,9 +159,8 @@ class CNNFocusing(nn.Module):
 
         pool = 2
         self.pool1 = nn.MaxPool2d((pool,pool))
-        self.pool2 = nn.MaxPool2d(3)
+        #self.pool2 = nn.MaxPool2d(3)
 
-        hidden_per_lmark = 10
         ch_per_lmark = self.conv2.weight.shape[0] // 72
         hidden_dim = int((crop_size/pool)**2 * ch_per_lmark)
         mask_diag = torch.diag(torch.ones(72))
@@ -111,7 +182,6 @@ class CNNFocusing(nn.Module):
         x = F.relu(self.conv2(x))
         x = torch.flatten(x, 1)
 
-
         self.linear1.weight.data.mul_(self.mask1.permute(1,0))
         x = self.linear1(x)
 
@@ -130,11 +200,11 @@ class FaceLandmarking(nn.Module):
             input_dim = 956
             
         self.ensemble = EnsembleProjection(input_dim, 144, projectors, projection_mask[:, :input_dim])
-        self.cnn_focusing = CNNFocusing(crop_size = CROP_SIZE)
+        self.cnn_focusing = CNNFocusing(crop_size = CROP_SIZE, hidden_per_lmark=10)
         self.ffn = nn.Sequential(
-          nn.Linear(288, 1024),
+          nn.Linear(288, 1024, bias=False),
           #nn.ReLU(),
-          nn.Linear(1024, 144),
+          nn.Linear(1024, 144, bias=False),
           #nn.ReLU()
         )
 
@@ -160,7 +230,7 @@ class FaceLandmarking(nn.Module):
             # abs_raw_landmarks = torch.flatten(abs_raw_landmarks, start_dim = -2)
             # raw_loss = self.pretraining_loss(abs_raw_landmarks, targets)
             raw_loss = self.loss_function(raw_landmarks, targets)
-            
+
             correction = self.cnn_focusing(multicrop)
 
             output = raw_landmarks + correction
@@ -173,6 +243,8 @@ class FaceLandmarking(nn.Module):
 
         elif self.train_phase >= 2:
             raw_landmarks = self.ensemble.predict(x)
+            raw_loss = self.loss_function(raw_landmarks, targets)
+            
             correction = self.cnn_focusing(multicrop)
 
             ffn_input = torch.cat((raw_landmarks, correction), dim = 1)
@@ -182,7 +254,7 @@ class FaceLandmarking(nn.Module):
             
             final_loss = self.loss_function(output, targets)
 
-            return output, final_loss, None    
+            return output, final_loss, raw_loss    
     
     @torch.no_grad()
     def predict(self, image, face_detail = True):

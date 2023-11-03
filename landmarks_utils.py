@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Ellipse, Rectangle
 import urllib.request as urlreq
 import torch
+from config import *
 
 
 def readtps(input, path):
@@ -179,7 +180,7 @@ def display_landmarks(landmarks, img, pixel_scale = False, origin = None, errors
 
 
 def get_relative_positions(landmarks):
-    margin_coef = torch.tensor([1.7, 1.85])
+    margin_coef = torch.tensor([1.7, 1.85]).to(DEVICE)
     
     # Calculate the mean absolute position of landmarks
     centroid = torch.mean(landmarks, axis=-2, keepdim=True)
@@ -215,7 +216,7 @@ def get_absolute_positions(relative_landmarks, centroid, size_measure):
 def get_face_angle(landmarks, image_shape):
     forehead = (landmarks[151, 0] * image_shape[1], landmarks[151, 1] * image_shape[0])
     chin = (landmarks[152, 0] * image_shape[1], landmarks[152, 1] * image_shape[0])
-    angle_rad = np.arctan2(chin[0] - forehead[0] , chin[1] - forehead[1]) * -1
+    angle_rad = np.arctan2(chin[0].item() - forehead[0].item() , chin[1].item() - forehead[1].item()) * -1
     angle_deg = np.degrees(angle_rad)
     return angle_deg.item()
 
