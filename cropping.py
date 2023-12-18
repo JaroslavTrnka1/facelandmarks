@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 import cv2
-import mediapipe as mp
 import imagesize
 from config import *
 
@@ -10,7 +9,6 @@ def crop_around_centroid(image, centroid, size_measure):
    
     subimage_center = torch.mul(centroid, torch.tensor([image.shape[1], image.shape[0]]).to(DEVICE))
     subimage_size = torch.mul(size_measure, torch.tensor([image.shape[1], image.shape[0]]).to(DEVICE))
-    subimage_size[0, 1] = subimage_size[0, 0] * 1.2
 
     subimage_margins = torch.cat([-1 * torch.squeeze(subimage_center - subimage_size), torch.squeeze(subimage_center + subimage_size)])
     image_margins = torch.tensor([0,0,image.shape[1], image.shape[0]]).to(DEVICE)
@@ -73,6 +71,11 @@ def rotate_image(angle_deg, image):
     rotated_image = cv2.warpAffine(image, rotation_matrix, (image.shape[1], image.shape[0]))
     return rotated_image
 
+def get_image_edges(image, threshold1=50, threshold2=150):
+    img_blur = cv2.GaussianBlur(image, (3,3), 5) 
+    edges = cv2.Canny(image=img_blur, threshold1=threshold1, threshold2=threshold2) 
+    return edges
+
 def get_subimage_shape(image_path, size_measure):
     width, height = imagesize.get(image_path)
     subimage_size = 2*torch.mul(size_measure, torch.tensor([width, height]).to(DEVICE)).squeeze()
@@ -84,28 +87,64 @@ def get_subimage_shape(image_path, size_measure):
     
 @torch.no_grad()
 def make_landmark_crops(raw_landmarks, image, crop_size):
-    try:
+    # check for the number of channels - is it possible to process one-channel picture? - YES
+    # check for the bach processing
 
-        # Scaling from (0,1) to pixel scale and transposing landmarks
-        raw_landmarks_pix = torch.mul(raw_landmarks.reshape(-1,2), torch.tensor([image.shape[1], image.shape[0]]).to(DEVICE)).permute(1,0)
-
-        # Preparing index matrices of all crops
-        crop_range = torch.arange(-crop_size // 2, crop_size // 2)
-
-        # shape (30,30,2) --> one layer of horizontal indices from -15 to 14, second the same verical
-        crop_matrix = torch.stack([crop_range.tile((crop_size,1)), crop_range[:, None].tile((1,crop_size))], dim = 2).to(DEVICE)
-
-        # shape: (x_coor_matrix horizontal, y_coor_matrix vertical, 2, num_landmarks)
-        crop_indices = (raw_landmarks_pix[None, None,:,:] + crop_matrix[:,:,:,None]).type(torch.LongTensor) # float to int for indices
-
-        image = torch.tensor(image).to(DEVICE)
-        # Cropping image around raw landmarks
-        sub_image = (image[crop_indices[:,:,1,:], crop_indices[:,:,0,:], :]).clone().detach()
-
-        # Final shape (3 for RGB * num_landmarks, x_crop_size, y_crop_size)
-        multicrop = sub_image.reshape(crop_size, crop_size, -1).permute(2,0,1).type(torch.float).to(DEVICE)
+    # Scaling from (0,1) to pixel scale and transposing landmarks
+    raw_landmarks_pix = torch.mul(raw_landmarks.reshape(-1,2), torch.tensor([image.shape[1], image.shape[0]]).to(DEVICE)).permute(1,0)
     
-    except:
-        print(raw_landmarks, image.shape, crop_size)
+    # Preparing index matrices of all crops
+    crop_range = torch.arange(-crop_size // 2, crop_size // 2)
+
+    # shape (30,30,2) --> one layer of horizontal indices from -15 to 14, second the same verical
+    crop_matrix = torch.stack([crop_range.tile((crop_size,1)), crop_range[:, None].tile((1,crop_size))], dim = 2).to(DEVICE)
+
+    # shape: (x_coor_matrix horizontal, y_coor_matrix vertical, 2, num_landmarks)
+    crop_indices = (raw_landmarks_pix[None, None,:,:] + crop_matrix[:,:,:,None]).type(torch.LongTensor) # float to int for indices
+
+    image = torch.tensor(image).to(DEVICE)
+    
+    # Cropping image around raw landmarks
+    sub_image = image[crop_indices[:,:,1,:], crop_indices[:,:,0,:], :]
+
+    # Final shape (3 for RGB * num_landmarks, x_crop_size, y_crop_size)
+    # cnn in torch requires channels first
+    multicrop = sub_image.reshape(crop_size, crop_size, -1).permute(2,0,1).type(torch.float).to(DEVICE)
 
     return multicrop
+
+def normalize_multicrop(multicrop):
+    if multicrop.shape[0] == 72:
+        unstacked_multicrop = torch.unflatten(multicrop, 0, (-1, 1))  # shape (72,1,height, width)
+    else:
+        unstacked_multicrop = torch.unflatten(multicrop, 0, (-1, 3))   # shape (72,3,height, width)
+    means = []
+    stds = []
+    for channel in range(unstacked_multicrop.shape[1]):
+        means.append(torch.mean(unstacked_multicrop[:,channel,...], dim=(0,1,2), keepdim=True))
+        stds.append(torch.std(unstacked_multicrop[:,channel,...], dim=(0,1,2), keepdim=True))
+    mean = torch.cat(means, dim=1).unsqueeze(-1)
+    std = torch.cat(stds, dim=1).unsqueeze(-1)
+    
+    normalized_multicrop = torch.clamp(torch.div(torch.sub(unstacked_multicrop, mean), 3 * std) + 0.5, 0, 1)
+
+    return torch.flatten(normalized_multicrop, start_dim=0, end_dim=1)
+
+def template_matching(multicrop, avg_template, template_method, crop_as_template = False):
+        
+    crops = np.split(multicrop.numpy(), indices_or_sections=multicrop.shape[-3], axis=-3)
+    templates = np.split(avg_template.numpy(), indices_or_sections=avg_template.shape[-3], axis=-3)
+    matches = np.empty([1,0])
+
+    for crop, template in zip(crops, templates):
+        if crop_as_template:
+            match = cv2.matchTemplate(template.squeeze(), crop.squeeze(), template_method) # 2D
+        else:
+            match = cv2.matchTemplate(crop.squeeze(), template.squeeze(), template_method) # 2D
+        
+        # TODO: ? Return some better format than concatenated vector?
+        # result shape (1,height*width*RGB*72)
+        matches = np.concatenate([matches, match.reshape(1,-1)], axis= 1)
+
+    # TODO: Remove magic constant
+    return torch.from_numpy(0.001 * matches/255).squeeze().type(torch.float32)

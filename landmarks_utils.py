@@ -221,18 +221,18 @@ def get_face_angle(landmarks, image_shape):
     return angle_deg.item()
 
 def rotate_landmarks(angle_deg, landmarks, image_shape):
-    center = torch.tensor([image_shape[1]//2, image_shape[0]//2])
-    pixel_landmarks = torch.mul(landmarks, torch.tensor([image_shape[1], image_shape[0]]))
+    center = torch.tensor([image_shape[1]//2, image_shape[0]//2], device=DEVICE)
+    pixel_landmarks = torch.mul(landmarks, torch.tensor([image_shape[1], image_shape[0]], device=DEVICE))
     rotation_matrix = cv2.getRotationMatrix2D((center[0].item(), center[1].item()), angle_deg, 1.0)
 
     centered_landmarks = pixel_landmarks - center
-    centered_landmarks = torch.matmul(centered_landmarks, torch.tensor(rotation_matrix[:,:2], dtype=torch.float32).T)
+    centered_landmarks = torch.matmul(centered_landmarks, torch.tensor(rotation_matrix[:,:2], dtype=torch.float32, device=DEVICE).T)
 
     rotated_landmarks = centered_landmarks + center
-    rotated_landmarks = torch.div(rotated_landmarks, torch.tensor([image_shape[1], image_shape[0]]))
+    rotated_landmarks = torch.div(rotated_landmarks, torch.tensor([image_shape[1], image_shape[0]], device=DEVICE))
     return rotated_landmarks
 
-def display_parent_landmarks(projection_mask, img_idx, landmark_idx):
+def display_parent_landmarks(projection_mask, img_idx, landmark_idx, from_inputs = True):
     preprocessed_inputs = np.load('preprocessed_data/preprocessed_inputs.npz')
     inputs = preprocessed_inputs['x_inp']
     targets = preprocessed_inputs['y_inp']
@@ -249,27 +249,13 @@ def display_parent_landmarks(projection_mask, img_idx, landmark_idx):
 
     landmark_idx = landmark_idx
     target_landmark = targ[landmark_idx:landmark_idx+1, :]
-
     mask = projection_mask[2 * landmark_idx,:]
-    input_landmarks = inp[mask].reshape(-1,2)
+
+    if from_inputs:
+        input_landmarks = inp[mask].reshape(-1,2)
+    else:
+        input_landmarks = targ.reshape(-1,)[mask].reshape(-1,2)
 
     display_landmarks(target_landmark, img, pixel_scale=False, origin='upper_left')
     display_landmarks(input_landmarks, img, pixel_scale=False, origin='upper_left')
-
-# landmarks = torch.tensor([[100, 150], [120, 160], [90, 145], [110, 155]], dtype = torch.float64)
-# relative_landmarks, centroid, size_measure = get_relative_positions(landmarks)
-
-# torch.mul(centroid, torch.tensor([2,3], dtype = int)).type(torch.int)
-
-# import torch
-# a = torch.randn(3,4,4)
-# #torch.flatten(a, start_dim = -2) == a.reshape(3,-1)
-
-# a.unflatten(-1, (-1,2)) == a.reshape(3, 4, 2, 2)
-
-# landmarks = torch.randn(20,50,10,2)
-# get_relative_positions(landmarks)[0].shape
-# relative_landmarks, centroid, size_measure = get_relative_positions(landmarks)
-# get_absolute_positions(relative_landmarks, centroid, size_measure).shape
-
 

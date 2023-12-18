@@ -3,7 +3,6 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 from landmarks_utils import readtps, MediaPipe_model, LBF_model, get_face_angle
-from cropping import crop_face_only
 from config import *
 
 

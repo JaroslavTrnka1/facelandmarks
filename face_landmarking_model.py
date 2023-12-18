@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchvision import models
 
 from landmarks_utils import *
 from cropping import *
@@ -189,9 +190,70 @@ class CNNFocusing(nn.Module):
         output = self.linear2(x)
 
         return output
+
+class TemplateMatchProjection(nn.Module):
+    def __init__(self, template_mask, bias = None):
+        super().__init__()
+
+        # should be (height*width*RGB*72)
+        input_dim = template_mask.shape[1]
+        self.linear = nn.Linear(input_dim, 144, bias = bias)
+        self.register_buffer('mask', template_mask)
+        self.bias = bias
+
+    def forward(self, x):
+        output = F.linear(x, self.linear.weight*self.mask, bias=self.bias)
+        return output
     
+# class PretrainedResNet(nn.Module):
+#     def __init__(self, num_landmarks, pretrained_resnet=True):
+#         super().__init__()
+
+#         self.backbone = models.resnet34(pretrained=pretrained_resnet)
+        
+#         # Remove the fully connected layers at the end of ResNet
+#         self.backbone = nn.Sequential(*list(self.backbone.children())[:-2])
+
+#         # Additional convolutional layers if needed
+#         self.conv_layers = nn.Sequential(
+#             nn.Conv2d(in_channels=..., out_channels=..., kernel_size=...),
+#             nn.ReLU(),
+#             # Add more convolutional layers if necessary
+#         )
+        
+#         # Flatten the output
+#         self.flatten = nn.Flatten()
+
+#         # Fully connected layers for landmark coordinates
+#         self.fc_landmarks = nn.Sequential(
+#             nn.Linear(in_features=..., out_features=..., bias=True),
+#             nn.ReLU(),
+#             nn.Linear(in_features=..., out_features=num_landmarks * 2, bias=True)
+#             # num_landmarks * 2 because each landmark has x and y coordinates
+#         )
+
+#     def forward(self, x):
+#         # Forward pass through the network
+#         x = self.backbone(x)
+#         x = self.conv_layers(x)
+#         x = self.flatten(x)
+#         landmarks = self.fc_landmarks(x)
+#         return landmarks   
+
+   
 class FaceLandmarking(nn.Module):
-    def __init__(self, projection_mask, projectors = 10):
+    def __init__(self, 
+                 projection_mask, 
+                 template_mask,
+                 projectors = 1,
+                 hidden_head_index=1,
+                 ffn_bias = False,
+                 ffn_projection_mask = None,
+                 avg_template = None,
+                 template_method = None,
+                 crop_as_template = False
+                 ):
+        
         super().__init__()
 
         if BOTH_MODELS:
@@ -200,66 +262,70 @@ class FaceLandmarking(nn.Module):
             input_dim = 956
             
         self.ensemble = EnsembleProjection(input_dim, 144, projectors, projection_mask[:, :input_dim])
-        self.cnn_focusing = CNNFocusing(crop_size = CROP_SIZE, hidden_per_lmark=10)
-        self.ffn = nn.Sequential(
-          nn.Linear(288, 1024, bias=False),
-          #nn.ReLU(),
-          nn.Linear(1024, 144, bias=False),
-          #nn.ReLU()
-        )
+        #self.cnn_focusing = CNNFocusing(crop_size = CROP_SIZE, hidden_per_lmark=10)
+        
+        self.templ_match_projection = TemplateMatchProjection(template_mask=template_mask)
+        
+        # self.ffn = nn.Sequential(
+        # #   nn.Linear(288, 288 * hidden_head_index, bias=ffn_bias),
+        #   #nn.ReLU(),
+        #   nn.Linear(288 * hidden_head_index, 144, bias=False),
+        #   #nn.ReLU()
+        # )
+        self.ffn = nn.Linear(144 * hidden_head_index, 144, bias=False)
+        self.ffn_projection_mask = ffn_projection_mask
 
         self.loss_function = nn.MSELoss()
         self.train_phase = 0
+        
+        self.template = avg_template
+        self.template_method = eval(str(template_method))
+        self.crop_as_template = crop_as_template
 
 
-    def forward(self, x, targets, multicrop = None):
+    def forward(self, x, targets, template_match = None):
 
         if self.train_phase == 0:
             outputs, losses = self.ensemble(x, targets)
-            # Loss_function už pouze na relative targets
-            # abs_landmarks = get_absolute_positions(output.unflatten(-1, (-1, 2)), centroid, size_measure)
-            # output = torch.flatten(abs_landmarks, start_dim = -2)
             final_loss = torch.sum(torch.stack(losses, dim=0), dim=0)
 
-            return outputs, final_loss, None
+            return outputs, final_loss, final_loss/self.ensemble.num_projectors
 
         elif self.train_phase == 1:
-            raw_landmarks = self.ensemble.predict(x)
             
-            # abs_raw_landmarks = get_absolute_positions(raw_landmarks.unflatten(-1, (-1, 2)), centroid, size_measure)
-            # abs_raw_landmarks = torch.flatten(abs_raw_landmarks, start_dim = -2)
-            # raw_loss = self.pretraining_loss(abs_raw_landmarks, targets)
-            raw_loss = self.loss_function(raw_landmarks, targets)
+            with torch.no_grad():
+                raw_landmarks = self.ensemble.predict(x)
+                raw_loss = self.loss_function(raw_landmarks, targets)
 
-            correction = self.cnn_focusing(multicrop)
-
+            # correction = self.cnn_focusing(multicrop)
+            correction = self.templ_match_projection(template_match)
+            
             output = raw_landmarks + correction
-            # abs_landmarks = get_absolute_positions(output.unflatten(-1, (-1, 2)), centroid, size_measure)
-            # output = torch.flatten(abs_landmarks, start_dim = -2)
-            
             final_loss = self.loss_function(output, targets)
-
             return output, final_loss, raw_loss
 
         elif self.train_phase >= 2:
-            raw_landmarks = self.ensemble.predict(x)
-            raw_loss = self.loss_function(raw_landmarks, targets)
             
-            correction = self.cnn_focusing(multicrop)
+            with torch.no_grad():
+                raw_landmarks = self.ensemble.predict(x)
+                raw_loss = self.loss_function(raw_landmarks, targets)
+                
+                # correction = self.cnn_focusing(multicrop)
+                correction = self.templ_match_projection(template_match)
 
-            ffn_input = torch.cat((raw_landmarks, correction), dim = 1)
-            output = self.ffn(ffn_input) + raw_landmarks
-            # abs_landmarks = get_absolute_positions(output.unflatten(-1, (-1, 2)), centroid, size_measure)
-            # output = torch.flatten(abs_landmarks, start_dim = -2)
+            #ffn_input = torch.cat((raw_landmarks, correction), dim = 1)
+            ffn_input = raw_landmarks + correction
+            output = F.linear(ffn_input, self.ffn.weight*self.ffn_projection_mask, bias=None) # + raw_landmarks
             
             final_loss = self.loss_function(output, targets)
 
             return output, final_loss, raw_loss    
     
     @torch.no_grad()
-    def predict(self, image, face_detail = True):
+    def predict(self, image, face_detail = True, gray = False):
         
         # TODO: Ošetřit multiple images
+        
         # Preprocessing pathway
         if BOTH_MODELS:
             input_landmarks = np.concatenate((MediaPipe_model(image), LBF_model(image)), axis = 0)
@@ -272,9 +338,13 @@ class FaceLandmarking(nn.Module):
         relative_landmarks, centroid, size_measure = get_relative_positions(input_landmarks)
         subimage = crop_around_centroid(image, centroid, size_measure)
         subimage = standard_face_size(subimage)
+        
         subimage = rotate_image(angle, subimage)  
         rotated_landmarks = rotate_landmarks(angle, relative_landmarks, subimage.shape)
         relative_landmarks = rotated_landmarks.reshape(1,-1)
+        
+        if gray:
+            subimage = cv2.cvtColor(subimage, cv2.COLOR_BGR2GRAY)[:,:,None]
         
         # Model pathway
         if self.train_phase == 0:
@@ -282,26 +352,41 @@ class FaceLandmarking(nn.Module):
  
         elif self.train_phase == 1:
             raw_landmarks = self.ensemble.predict(relative_landmarks)
-            multicrop = make_landmark_crops(raw_landmarks, subimage, crop_size = CROP_SIZE)
-            correction = self.cnn_focusing(multicrop[None,:,:,:])
+            
+            multicrop = normalize_multicrop(make_landmark_crops(raw_landmarks, subimage, CROP_SIZE))
+            # img_edges = get_image_edges(subimage)[:,:,None]
+            # multicrop = make_landmark_crops(raw_landmarks, img_edges, CROP_SIZE)
+
+            template_match = template_matching(multicrop, self.template, self.template_method, crop_as_template=self.crop_as_template)
+            #correction = self.cnn_focusing(multicrop[None,:,:,:])
+            correction = self.templ_match_projection(template_match)
 
             output = raw_landmarks + correction
         
         elif self.train_phase == 2:
             raw_landmarks = self.ensemble.predict(relative_landmarks)
-            multicrop = make_landmark_crops(raw_landmarks, subimage, crop_size = CROP_SIZE)
-            correction = self.cnn_focusing(multicrop[None,:,:,:])
-            ffn_input = torch.cat((raw_landmarks, correction), dim = 1)
             
-            output = self.ffn(ffn_input) + raw_landmarks
+            multicrop = normalize_multicrop(make_landmark_crops(raw_landmarks, subimage, CROP_SIZE))
+            # img_edges = get_image_edges(subimage)[:,:,None]
+            # multicrop = make_landmark_crops(raw_landmarks, img_edges, CROP_SIZE)
+
+            template_match = template_matching(multicrop, self.template, self.template_method, crop_as_template=self.crop_as_template)
+            #correction = self.cnn_focusing(multicrop[None,:,:,:])
+            correction = self.templ_match_projection(template_match)
+            
+            #ffn_input = torch.cat((raw_landmarks, correction), dim = 1)
+            ffn_input = raw_landmarks + correction
+            output = F.linear(ffn_input, self.ffn.weight*self.ffn_projection_mask, bias=None) # + raw_landmarks
+            
+            # output = self.ffn(ffn_input) + raw_landmarks
         
         output = output.reshape(-1,2).detach()
         #output = output.unflatten(-1, (-1, 2)).cpu().detach()
         # output shape: (1, 72, 2) - důležité pro případný batching
 
-        abs_output = get_absolute_positions(output, centroid, size_measure)    
+        abs_output = get_absolute_positions(rotate_landmarks(-angle, output, subimage.shape), centroid, size_measure)    
         abs_output = abs_output.cpu().detach().numpy()
-        output = output.numpy()
+        output = output.cpu().numpy()
         
         # Pixel dimension
         # pixel_multiplyer = np.array([subimage.shape[1], subimage.shape[0]]).reshape(1,1,2)
