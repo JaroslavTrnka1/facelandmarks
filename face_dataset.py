@@ -14,11 +14,13 @@ class FaceDataset(Dataset):
     def __init__(self, model=None,
                  subgroups = None,
                  rotate = True,
+                 template_mode = False,
                  avg_template = None,
                  template_method = None,
                  work = False,
                  gray = False,
-                 crop_as_template = False
+                 crop_as_template = False,
+                 crop_size = 46
                  ):
    
         preprocessed_inputs = np.load('preprocessed_data/preprocessed_inputs.npz')
@@ -27,7 +29,7 @@ class FaceDataset(Dataset):
                 
         with open("preprocessed_data/path_list.txt", "r") as pl:
             for path in pl:
-                path_list.append(path.strip())
+                path_list.append(path.strip().replace('\\', '/'))
         
         all_inputs = preprocessed_inputs['x_inp']
         all_targets = preprocessed_inputs['y_inp']
@@ -61,21 +63,19 @@ class FaceDataset(Dataset):
         self.y_true = subgroup_y_true
         self.angles = subgroup_angles
         self.path_list = subgroup_pathlist
-          
+        self.crop_size = crop_size  
         self.model = model
         self.rotate = rotate
-        self.template = avg_template
-        self.template_method = eval(str(template_method))
+        self.pretraining = True
+        self.template_mode = template_mode
         self.work = work
         self.gray = gray
-        self.crop_as_template = crop_as_template
         
-        if self.template is not None:
-            self.pretraining = True
-        else:
-            self.pretraining = False
-            
-
+        if template_mode:
+            self.template = avg_template
+            self.template_method = eval(str(template_method))
+            self.crop_as_template = crop_as_template
+             
     def __len__(self):
         return len(self.path_list)
 
@@ -98,7 +98,7 @@ class FaceDataset(Dataset):
         x = relative_landmarks.reshape(x.shape)
         y = relative_targets.reshape(y.shape)
 
-        if self.pretraining and self.template is not None:
+        if self.pretraining and not self.template_mode:
             return x, y, 0
 
         else:
@@ -121,17 +121,28 @@ class FaceDataset(Dataset):
             
             if self.gray:
                 subimage = cv2.cvtColor(subimage, cv2.COLOR_BGR2GRAY)[:,:,None]
-                
-            multicrop = normalize_multicrop(make_landmark_crops(raw_landmarks, subimage, CROP_SIZE))
-            # multicrop = make_landmark_crops(raw_landmarks, img_edges, CROP_SIZE)
-            # multicrop = make_landmark_crops(y, subimage, CROP_SIZE)
-
-            template_match = template_matching(multicrop, self.template, self.template_method, crop_as_template=self.crop_as_template)
             
-        if not self.work:
-            return x, y, template_match #, multicrop, subimage, image
-        else:
-            return x, y, multicrop, subimage , image#, template_match
+            multicrop = normalize_multicrop(make_landmark_crops(raw_landmarks, subimage, self.crop_size))
+            
+            if self.template_mode:    
+                multicrop = template_matching(multicrop, self.template, self.template_method, crop_as_template=self.crop_as_template)
+
+            # multicrop = make_landmark_crops(y, subimage, self.crop_size)
+
+            if self.model.train_phase == 1:
+                return x, y, multicrop, raw_landmarks
+            
+            elif self.model.train_phase == 2:
+                correction = self.model.cnn_ensemble.predict(multicrop, catenate=False)
+                landmarks  = raw_landmarks + correction
+                multicrop2 = normalize_multicrop(make_landmark_crops(landmarks, subimage, self.crop_size))
+                return x, y, multicrop2, landmarks
+            
+        
+        # if not self.work:
+        #     return x, y, multicrop #, multicrop, subimage, image
+        # else:
+        #     return x, y, multicrop, subimage , image#, template_match
     
     def get_landmarks(self, idx):
         x = torch.tensor(self.x[idx,:], dtype = torch.float).to(DEVICE)
@@ -240,9 +251,9 @@ class FaceDataset(Dataset):
             
     #         raw_landmarks = self.model.ensemble.predict(x)
             
-    #         # multicrop = make_landmark_crops(raw_landmarks, subimage, CROP_SIZE)
-    #         #multicrop = make_landmark_crops(raw_landmarks, img_edges, CROP_SIZE)
-    #         multicrop = make_landmark_crops(y, subimage, CROP_SIZE)
+    #         # multicrop = make_landmark_crops(raw_landmarks, subimage, self.crop_size)
+    #         #multicrop = make_landmark_crops(raw_landmarks, img_edges, self.crop_size)
+    #         multicrop = make_landmark_crops(y, subimage, self.crop_size)
             
     #         template_match = template_matching(multicrop, self.template, self.template_method)
             

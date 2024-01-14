@@ -77,7 +77,11 @@ def get_image_edges(image, threshold1=50, threshold2=150):
     return edges
 
 def get_subimage_shape(image_path, size_measure):
-    width, height = imagesize.get(image_path)
+    try:
+      width, height = imagesize.get(image_path)
+    except:
+      image_path = '/'.join(image_path.split('/')[:-1]) + '/' + image_path.split('/')[-1].split('.')[0] + '.' + image_path.split('/')[-1].split('.')[1].lower()
+      width, height = imagesize.get(image_path)
     subimage_size = 2*torch.mul(size_measure, torch.tensor([width, height]).to(DEVICE)).squeeze()
     new_width = STANDARD_IMAGE_WIDTH
     scale = new_width / subimage_size[0]
@@ -87,8 +91,6 @@ def get_subimage_shape(image_path, size_measure):
     
 @torch.no_grad()
 def make_landmark_crops(raw_landmarks, image, crop_size):
-    # check for the number of channels - is it possible to process one-channel picture? - YES
-    # check for the bach processing
 
     # Scaling from (0,1) to pixel scale and transposing landmarks
     raw_landmarks_pix = torch.mul(raw_landmarks.reshape(-1,2), torch.tensor([image.shape[1], image.shape[0]]).to(DEVICE)).permute(1,0)

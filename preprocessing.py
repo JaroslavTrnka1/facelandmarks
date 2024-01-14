@@ -21,7 +21,7 @@ def prepare_training_landmarks(both_models = BOTH_MODELS):
         x = np.empty((0, 478 * 2))
     y_true = np.empty((0, 144))
     
-    face_detail_coordinates = np.empty((0, 4))
+    # face_detail_coordinates = np.empty((0, 4))
     groups = get_sample_groups()
     path_list = []
     angles = np.empty(0)
