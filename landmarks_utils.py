@@ -5,6 +5,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Ellipse, Rectangle
 import urllib.request as urlreq
+import torch
+from config import *
 
 
 def readtps(input, path):
@@ -175,4 +177,85 @@ def display_landmarks(landmarks, img, pixel_scale = False, origin = None, errors
             ax.add_patch(circ2)
 
     plt.show()
+
+
+def get_relative_positions(landmarks):
+    margin_coef = torch.tensor([1.7, 1.85]).to(DEVICE)
     
+    # Calculate the mean absolute position of landmarks
+    centroid = torch.mean(landmarks, axis=-2, keepdim=True)
+
+    # Calculate relative positions by subtracting the mean
+    relative_landmarks = torch.subtract(landmarks, centroid)
+
+    # Calculate the maximum absolute distance from the mean position
+    max_distance = torch.mul(torch.max(torch.abs(relative_landmarks), axis=-2, keepdim = True)[0], margin_coef)
+
+    # Normalize relative positions to the range [0, 1] by dividing by the maximum absolute distance
+    relative_landmarks = torch.div(torch.add(relative_landmarks, max_distance), (2 * max_distance))
+
+    # Calculate a measure of size (maximum absolute distance)
+    size_measure = max_distance
+
+    return relative_landmarks, centroid, size_measure
+
+def fit_to_relative_centroid(landmarks, centroid, size_measure):
+    
+    relative_landmarks = torch.subtract(landmarks, centroid)
+    relative_landmarks = torch.div(torch.add(relative_landmarks, size_measure), (2 * size_measure))
+    
+    return relative_landmarks
+
+def get_absolute_positions(relative_landmarks, centroid, size_measure):
+
+    # Scale the relative positions by the size_measure and add the mean position
+    absolute_landmarks = torch.sub(2 * torch.mul(relative_landmarks, size_measure), torch.add(size_measure, -1 * centroid))
+
+    return absolute_landmarks
+
+def get_face_angle(landmarks, image_shape):
+    forehead = (landmarks[151, 0] * image_shape[1], landmarks[151, 1] * image_shape[0])
+    chin = (landmarks[152, 0] * image_shape[1], landmarks[152, 1] * image_shape[0])
+    angle_rad = np.arctan2(chin[0].item() - forehead[0].item() , chin[1].item() - forehead[1].item()) * -1
+    angle_deg = np.degrees(angle_rad)
+    return angle_deg.item()
+
+def rotate_landmarks(angle_deg, landmarks, image_shape):
+    center = torch.tensor([image_shape[1]//2, image_shape[0]//2], device=DEVICE)
+    pixel_landmarks = torch.mul(landmarks, torch.tensor([image_shape[1], image_shape[0]], device=DEVICE))
+    rotation_matrix = cv2.getRotationMatrix2D((center[0].item(), center[1].item()), angle_deg, 1.0)
+
+    centered_landmarks = pixel_landmarks - center
+    centered_landmarks = torch.matmul(centered_landmarks, torch.tensor(rotation_matrix[:,:2], dtype=torch.float32, device=DEVICE).T)
+
+    rotated_landmarks = centered_landmarks + center
+    rotated_landmarks = torch.div(rotated_landmarks, torch.tensor([image_shape[1], image_shape[0]], device=DEVICE))
+    return rotated_landmarks
+
+def display_parent_landmarks(projection_mask, img_idx, landmark_idx, from_inputs = True):
+    preprocessed_inputs = np.load('preprocessed_data/preprocessed_inputs.npz')
+    inputs = preprocessed_inputs['x_inp']
+    targets = preprocessed_inputs['y_inp']
+    path_list = []
+    with open("preprocessed_data/path_list.txt", "r") as pl:
+        for path in pl:
+            path_list.append(path.strip())
+            
+    idx = img_idx
+    img = cv2.imread(path_list[idx])
+
+    inp = inputs[idx,:]
+    targ = targets[idx,:].reshape(-1,2)
+
+    landmark_idx = landmark_idx
+    target_landmark = targ[landmark_idx:landmark_idx+1, :]
+    mask = projection_mask[2 * landmark_idx,:]
+
+    if from_inputs:
+        input_landmarks = inp[mask].reshape(-1,2)
+    else:
+        input_landmarks = targ.reshape(-1,)[mask].reshape(-1,2)
+
+    display_landmarks(target_landmark, img, pixel_scale=False, origin='upper_left')
+    display_landmarks(input_landmarks, img, pixel_scale=False, origin='upper_left')
+
