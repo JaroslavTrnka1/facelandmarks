@@ -9,6 +9,7 @@ preprocessed_data/haarcascade_frontalface_alt2.xml
 *.zip
 /AI_Morphometrics/*
 /face_env/*
+.venv
 /model/*
 .ipynb_checkpoints/Face_Landmarking3-checkpoint.ipynb
 .ipynb_checkpoints/Face_Landmarking3-checkpoint.ipynb
