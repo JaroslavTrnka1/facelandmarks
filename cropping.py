@@ -2,7 +2,8 @@ import numpy as np
 import torch
 import cv2
 import imagesize
-from config import *
+import mediapipe as mp
+from facelandmarks.config import DEVICE 
 
 
 def crop_around_centroid(image, centroid, size_measure):
@@ -22,40 +23,40 @@ def crop_around_centroid(image, centroid, size_measure):
     return subimage
 
 
-# def crop_face_only(image):
-#     # Initialize the face detection module and process the image
-#     face_detection = mp.solutions.face_detection.FaceDetection()
-#     results = face_detection.process(image)
+def crop_face_only(image):
+    # Initialize the face detection module and process the image
+    face_detection = mp.solutions.face_detection.FaceDetection()
+    results = face_detection.process(image)
     
-#     # Check if any faces were detected
-#     if results.detections:
+    # Check if any faces were detected
+    if results.detections:
         
-#         for detection in results.detections:
-#             # Extract the bounding box coordinates
-#             bbox = detection.location_data.relative_bounding_box
-#             image_height, image_width, _ = image.shape
+        for detection in results.detections:
+            # Extract the bounding box coordinates
+            bbox = detection.location_data.relative_bounding_box
+            image_height, image_width, _ = image.shape
             
-#             # accomodation of the box size
-#             size_coef = 1.7
+            # accomodation of the box size
+            size_coef = 2
             
-#             width = int(bbox.width * image_width * size_coef)
-#             height = int(bbox.height * image_height * size_coef)
+            width = int(bbox.width * image_width * size_coef)
+            height = int(bbox.height * image_height * size_coef)
             
-#             xmin = int(bbox.xmin * image_width - (width/size_coef) * (size_coef - 1)/2)
-#             ymin = int(bbox.ymin * image_height - (height/size_coef) * (size_coef - 1)/1.3)
+            xmin = int(bbox.xmin * image_width - (width/size_coef) * (size_coef - 1)/2)
+            ymin = int(bbox.ymin * image_height - (height/size_coef) * (size_coef - 1)/1.3)
             
-#             xmax = min(xmin + width, image_width)
-#             ymax = min(ymin + height, image_height)
+            xmax = min(xmin + width, image_width)
+            ymax = min(ymin + height, image_height)
             
-#             xmin = max(0, xmin)
-#             ymin = max(0, ymin)
+            xmin = max(0, xmin)
+            ymin = max(0, ymin)
             
-#             subimage = np.ascontiguousarray(image[ymin:ymax, xmin:xmax, :])
+            subimage = np.ascontiguousarray(image[ymin:ymax, xmin:xmax, :])
     
-#         return subimage, xmin, ymin, xmax, ymax
+        return subimage, xmin, ymin, xmax, ymax
     
-#     else:
-#         return None 
+    else:
+        return None 
  
  
 def standard_face_size(image):

@@ -8,11 +8,11 @@ from sklearn.metrics.pairwise import euclidean_distances
 import pandas as pd
 from glob import glob
 from itertools import chain
-from landmarks_utils import *
-from cropping import *
-from config import *
-from face_landmarking_model import *
-from face_dataset import *
+from facelandmarks.landmarks_utils import *
+from facelandmarks.cropping import *
+from facelandmarks.config import *
+from facelandmarks.face_landmarking_model import *
+from facelandmarks.face_dataset import *
    
 def new_cache():
     cache = {}
@@ -131,7 +131,7 @@ def prepare_trainers(num_parent_landmarks = 5,
         crop_size=crop_size,
         batch_norm = batch_norm,
         num_cnn=num_cnn
-        ).to(DEVICE)
+        ).to(torch.float32).to(DEVICE)
     
     del(preparation_dataset)
     

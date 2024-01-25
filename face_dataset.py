@@ -5,9 +5,9 @@ from torch.utils.data import Dataset
 import cv2
 import numpy as np
 
-from cropping import standard_face_size, make_landmark_crops, crop_around_centroid, rotate_image, get_subimage_shape, normalize_multicrop, template_matching
-from config import *
-from landmarks_utils import *
+from facelandmarks.cropping import standard_face_size, make_landmark_crops, crop_around_centroid, rotate_image, get_subimage_shape, normalize_multicrop, template_matching
+from facelandmarks.config import *
+from facelandmarks.landmarks_utils import *
 
 
 class FaceDataset(Dataset):
@@ -25,6 +25,7 @@ class FaceDataset(Dataset):
    
         preprocessed_inputs = np.load('preprocessed_data/preprocessed_inputs.npz')
         all_angles = np.load('preprocessed_data/angles.npz')
+        all_crops = np.load('preprocessed_data/crops.npz')
         path_list = []
                 
         with open("preprocessed_data/path_list.txt", "r") as pl:
@@ -40,6 +41,7 @@ class FaceDataset(Dataset):
             subgroup_x = np.empty((0, all_inputs.shape[1]))
             subgroup_y_true = np.empty((0, all_targets.shape[1]))
             subgroup_angles = np.empty(0)
+            subgroup_crops = np.empty((0,4))
             subgroup_pathlist = []
             
             for subgroup in subgroups:
@@ -49,11 +51,13 @@ class FaceDataset(Dataset):
                         subgroup_x = np.concatenate((subgroup_x, all_inputs[i:i+1,:]), axis = 0)
                         subgroup_y_true = np.concatenate((subgroup_y_true, all_targets[i:i+1,:]), axis = 0)
                         subgroup_angles = np.concatenate([subgroup_angles, all_angles['angles'][i:i+1]], axis = 0)
+                        subgroup_crops = np.concatenate([subgroup_crops, all_crops['crops'][i:i+1,:]], axis = 0)
         else:
             subgroup_x = all_inputs
             subgroup_y_true = all_targets
             subgroup_pathlist = path_list
             subgroup_angles = all_angles['angles']
+            subgroup_crops = all_crops['crops']
         
         if BOTH_MODELS:
             self.x = subgroup_x
@@ -62,6 +66,7 @@ class FaceDataset(Dataset):
             
         self.y_true = subgroup_y_true
         self.angles = subgroup_angles
+        self.crops = subgroup_crops
         self.path_list = subgroup_pathlist
         self.crop_size = crop_size  
         self.model = model
@@ -85,25 +90,28 @@ class FaceDataset(Dataset):
         x = torch.tensor(self.x[idx,:], dtype = torch.float).to(DEVICE)
         y = torch.tensor(self.y_true[idx,:], dtype = torch.float).to(DEVICE)
         img_path = self.path_list[idx]
+        crops = self.crops[idx]
         
         relative_landmarks, centroid, size_measure = get_relative_positions(x.reshape(-1,2))
         relative_targets = fit_to_relative_centroid(y.reshape(-1,2), centroid, size_measure)
-        subimage_shape = get_subimage_shape(img_path, size_measure)
+        # subimage_shape = get_subimage_shape(img_path, size_measure)
+        subimage_shape = torch.tensor([crops[3] - crops[1], crops[2] - crops[0]])
         
         if self.rotate:
             angle = self.angles[idx]
             relative_landmarks = rotate_landmarks(angle, relative_landmarks, subimage_shape)
             relative_targets = rotate_landmarks(angle, relative_targets, subimage_shape)
             
-        x = relative_landmarks.reshape(x.shape)
-        y = relative_targets.reshape(y.shape)
-
+        x = relative_landmarks.reshape(x.shape).type(torch.float32)
+        y = relative_targets.reshape(y.shape).type(torch.float32)
+        
         if self.pretraining and not self.template_mode:
             return x, y, 0
 
         else:
             image = cv2.imread(img_path)
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            image = np.ascontiguousarray(image[crops[1]:crops[3], crops[0]:crops[2], :])
 
             subimage = crop_around_centroid(image, centroid, size_measure)
             subimage = standard_face_size(subimage)

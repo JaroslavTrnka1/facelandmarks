@@ -5,9 +5,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models
 
-from landmarks_utils import *
-from cropping import *
-from config import *
+from facelandmarks.landmarks_utils import *
+from facelandmarks.cropping import *
+from facelandmarks.config import *
 
 
 
@@ -28,7 +28,6 @@ class RawProjection(nn.Module):
 
         #x = self.linear1(x)
         #self.linear1.weight.data = self.linear1.weight * self.mask
-
         output = F.linear(x, self.linear2.weight*self.mask, bias=None)
 
         if targets == None:
