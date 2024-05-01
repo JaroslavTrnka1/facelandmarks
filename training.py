@@ -20,6 +20,7 @@ def new_cache():
     cache['main_cache'] = []
     cache['improvements_cache'] = []
     cache['test_cache'] = []
+    cache['lr'] = []
     cache['time_cache'] = {
         "dataset": [],
         "model": [],
@@ -44,30 +45,30 @@ def create_projection_mask(dataset, num_parent_landmarks = 5, inputs = True):
     mask = avg_sim_matrix < np.partition(avg_sim_matrix, num_parent_landmarks, axis=1)[:,num_parent_landmarks:num_parent_landmarks+1]
     return torch.from_numpy(mask).repeat_interleave(2, dim = 0).repeat_interleave(2, dim=1)
 
-def create_template_mask(template_size, crop_size, gray=False, crop_as_template=False):
-    if not gray:
-        channels = 3
-    else:
-        channels = 1
-    if crop_as_template:
-        template_match_dim = (template_size - crop_size + 1)**2
-    else:
-        template_match_dim = (crop_size - template_size + 1)**2
-    return torch.eye(72).repeat_interleave(2, dim = 0).repeat_interleave(template_match_dim*channels, dim=1).type(torch.float32)
+# def create_template_mask(template_size, crop_size, gray=False, crop_as_template=False):
+#     if not gray:
+#         channels = 3
+#     else:
+#         channels = 1
+#     if crop_as_template:
+#         template_match_dim = (template_size - crop_size + 1)**2
+#     else:
+#         template_match_dim = (crop_size - template_size + 1)**2
+#     return torch.eye(72).repeat_interleave(2, dim = 0).repeat_interleave(template_match_dim*channels, dim=1).type(torch.float32)
 
-def get_avg_template(dataset, template_size, template_sample = 50, gray = True):
-    multicrops = []
-    for i in range(template_sample):
-        idx = torch.randint(dataset.__len__(),(1,))
-        # targets, subimage, img_path = prep_dataset.__getitem__(idx)
-        # img_blur = cv2.GaussianBlur(subimage, (3,3), 5) 
-        # edges = cv2.Canny(image=img_blur, threshold1=50, threshold2=150) 
-        # image = edges[:,:,None]
-        # multicrop = make_landmark_crops(targets.reshape(1,-1), image, template_size)
-        x, y, multicrop = dataset.get_gray_multicrop(idx, template_size, gray=gray, from_targets=True)
-        multicrops.append(normalize_multicrop(multicrop))
+# def get_avg_template(dataset, template_size, template_sample = 50, gray = True):
+#     multicrops = []
+#     for i in range(template_sample):
+#         idx = torch.randint(dataset.__len__(),(1,))
+#         # targets, subimage, img_path = prep_dataset.__getitem__(idx)
+#         # img_blur = cv2.GaussianBlur(subimage, (3,3), 5) 
+#         # edges = cv2.Canny(image=img_blur, threshold1=50, threshold2=150) 
+#         # image = edges[:,:,None]
+#         # multicrop = make_landmark_crops(targets.reshape(1,-1), image, template_size)
+#         x, y, multicrop = dataset.get_gray_multicrop(idx, template_size, gray=gray, from_targets=True)
+#         multicrops.append(normalize_multicrop(multicrop))
 
-    return torch.mean(torch.stack(multicrops, dim=0), dim=0)
+#     return torch.mean(torch.stack(multicrops, dim=0), dim=0)
 
 
 def get_best_groups():
@@ -93,10 +94,7 @@ def prepare_trainers(num_parent_landmarks = 5,
                      lr_ffn=0.01,
                      start_out_channels=8,
                      ffn_bias=False,
-                     template_size=50,
                      gray_scale = False,
-                     template_method = None,
-                     crop_as_template = False, 
                      kernel_sizes = [3,3,3],
                      activations = True,
                      pooling = True,
@@ -104,16 +102,12 @@ def prepare_trainers(num_parent_landmarks = 5,
                      batch_norm = False,
                      num_cnn = 5):
     
-    print('Preparing masks and templates...')
+    print('Preparing masks ...')
     preparation_dataset = FaceDataset(rotate=rotate, gray=gray_scale)
     projection_mask = create_projection_mask(preparation_dataset, num_parent_landmarks=5)
     ffn_projection_mask = create_projection_mask(preparation_dataset, num_parent_landmarks=num_parent_landmarks, inputs=False)
     # But only raw projection for parent landmarks!
     ffn_projection_mask = ffn_projection_mask.repeat(1,num_cnn+1)
-    
-    # TODO: crop_size as hyperparameter
-    # template_mask = create_template_mask(template_size, crop_size, gray=gray_scale, crop_as_template=crop_as_template)    
-    # avg_template = get_avg_template(preparation_dataset, template_size, gray=gray_scale)
     
     print('Preparing model, optimizers, datasets and dataloaders...')
     best_groups = get_best_groups()
@@ -123,8 +117,6 @@ def prepare_trainers(num_parent_landmarks = 5,
         projectors=projectors, 
         start_out_channels=start_out_channels, 
         ffn_projection_mask=ffn_projection_mask,
-        template_method=template_method,
-        crop_as_template=crop_as_template,
         kernel_sizes=kernel_sizes,
         activations=activations,
         pooling=pooling,
@@ -151,13 +143,19 @@ def prepare_trainers(num_parent_landmarks = 5,
         ensemble_dataloader.append(DataLoader(simple_dataset, batch_size=200, sampler=EnsembleSampler(simple_dataset)))
     
     ensemble_optimizer = torch.optim.Adam(model.ensemble.parameters(), lr = lr_projection)
-    cnn_optimizer = torch.optim.Adam(model.cnn_ensemble.parameters(),lr = lr_cnn)
-    cnn_optimizer2 = torch.optim.Adam(model.cnn_ensemble2.parameters(),lr = lr_cnn)
+    cnn_optimizer = torch.optim.Adam(model.transformer_focusing.parameters(),lr = lr_cnn)
+    # cnn_optimizer = torch.optim.Adam(model.cnn_ensemble.parameters(),lr = lr_cnn)
+    # cnn_optimizer2 = torch.optim.Adam(model.cnn_ensemble2.parameters(),lr = lr_cnn)
     ffn_optimizer = torch.optim.Adam(model.ffn.parameters(), lr = lr_ffn)
     projection_scheduler = torch.optim.lr_scheduler.StepLR(ensemble_optimizer, step_size=1, gamma=0.98)
-    cnn_scheduler = torch.optim.lr_scheduler.StepLR(cnn_optimizer, step_size=1, gamma=0.99)
-    optimizers = {"ensemble": ensemble_optimizer, "cnn":cnn_optimizer, "cnn2":cnn_optimizer2, "ffn":ffn_optimizer}
-    schedulers = {"ensemble": projection_scheduler, "cnn": cnn_scheduler}
+    # cnn_scheduler = torch.optim.lr_scheduler.StepLR(cnn_optimizer, step_size=1, gamma=0.99)
+    # cnn_scheduler = torch.optim.lr_scheduler.OneCycleLR(cnn_optimizer, max_lr=lr_cnn, steps_per_epoch=len(main_dataloader), epochs=8,anneal_strategy='linear')
+    # cnn_scheduler1 = torch.optim.lr_scheduler.ConstantLR(cnn_optimizer, start_factor = 0.1, end_factor = 1, total_iters = 10)
+    # cnn_scheduler2 = torch.optim.lr_scheduler.ConstantLR(cnn_optimizer, start_factor = 1, end_factor = 0.1, total_iters = 50)
+    # cnn_scheduler = torch.optim.lr_scheduler.SequentialLR(cnn_optimizer, schedulers=[cnn_scheduler1, cnn_scheduler2])
+    
+    optimizers = {"ensemble": ensemble_optimizer, "cnn":cnn_optimizer,  "ffn":ffn_optimizer} #"cnn2":cnn_optimizer2,
+    schedulers = {"ensemble": projection_scheduler}#, "cnn": cnn_scheduler}
     datasets = {"main": main_dataset, "ensemble": ensemble_dataset, 'test': test_dataset}
     dataloaders = {"main": main_dataloader, "ensemble": ensemble_dataloader, 'test': test_dataloader}
     
@@ -171,7 +169,7 @@ def train (model,
            datasets, 
            dataloaders, 
            pretraining = True,
-           pretrain_epochs = 150,
+           pretrain_epochs = 170,
            cnn_epochs = 0,
            ffn_epochs = 0,
            cnn_ffn_epochs = 0,
@@ -188,10 +186,10 @@ def train (model,
             PRETRAINING = False
             actual_optimizers = [optimizers["cnn"]]
             TRAIN_PHASE += 1
-            print('\n Freezing raw_projection, training second module (CNN/template_match).')
+            print('\n Freezing raw_projection, training second module (CNN).')
 
         if epoch == (pretrain_epochs + cnn_epochs) and (ffn_epochs + all_train_epochs) > 0:
-            actual_optimizers = [optimizers["cnn2"]]
+            actual_optimizers = [optimizers["ffn"]]
             TRAIN_PHASE += 1
             print('\n Freezing second module, training top FFN.')
 
@@ -278,7 +276,9 @@ def train (model,
                 for optimizer in actual_optimizers:
                     optimizer.step()
                 
-                schedulers["cnn"].step()    
+                # cache['lr'].append(schedulers["cnn"].get_last_lr()[0])
+                # if model.train_phase == 1:
+                    # schedulers["cnn"].step()    
                 
                 if iteration % 2 == 0:
                     model.eval()

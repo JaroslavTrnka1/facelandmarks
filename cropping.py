@@ -3,7 +3,7 @@ import torch
 import cv2
 import imagesize
 import mediapipe as mp
-from facelandmarks.config import DEVICE 
+from facelandmarks.config import DEVICE, STANDARD_IMAGE_WIDTH 
 
 
 def crop_around_centroid(image, centroid, size_measure):
