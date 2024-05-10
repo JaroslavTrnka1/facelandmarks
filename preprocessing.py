@@ -6,16 +6,23 @@ from facelandmarks.landmarks_utils import readtps, MediaPipe_model, LBF_model, g
 from facelandmarks.cropping import crop_face_only
 from facelandmarks.config import BOTH_MODELS
 
+def file2lowercase(file_path):
+    new_file_path = file_path[:-4]
+    new_extension = file_path[-4:].lower()
+    new_file_path = new_file_path + new_extension
+    os.rename(file_path, new_file_path)
 
-def get_sample_groups():
+def get_sample_groups(root_dirs = None):
+    if root_dirs is None:
+        root_dirs = ['./AI_Morphometrics']
     sample_groups = []
-    for root, dirs, files in os.walk('./AI_Morphometrics', topdown=True):
-        if not dirs:
-            sample_groups.append(root)
+    for root_dir in root_dirs:
+        for root, dirs, files in os.walk(root_dir, topdown=True):
+            if not dirs:
+                sample_groups.append(root.replace("\\","/"))
     return sample_groups
 
-
-def prepare_training_landmarks(both_models = BOTH_MODELS):
+def prepare_training_landmarks(both_models = BOTH_MODELS, root_dirs = None):
     if both_models:
         x = np.empty((0, 546 * 2))
     else:
@@ -23,7 +30,7 @@ def prepare_training_landmarks(both_models = BOTH_MODELS):
     y_true = np.empty((0, 144))
     
     # face_detail_coordinates = np.empty((0, 4))
-    groups = get_sample_groups()
+    groups = get_sample_groups(root_dirs)
     path_list = []
     angles = np.empty(0)
     crops = np.empty((0,4))
@@ -31,7 +38,7 @@ def prepare_training_landmarks(both_models = BOTH_MODELS):
     for group in tqdm(groups):
 
         for file in os.listdir(group):
-            if '.TPS' in file or '.tps' in file:
+            if file[-4:] in ['.TPS', '.tps']:
                 tps = readtps(group + '/' + file, group)
 
                 for idx in range(len(tps['im'])):
@@ -39,16 +46,19 @@ def prepare_training_landmarks(both_models = BOTH_MODELS):
                                       
                     try:
                         
-                        img_path = group + '/' + tps['im'][idx]
-                        _,img_path, extension = img_path.replace('\\', '/').split('.')
-                        img_path = '.' + img_path + '.' + extension.lower()
+                        img_file = tps['im'][idx]
+                        filename, extension = img_file.split('.')
+                        if extension in ['JPG', 'BMP']:
+                            img_path = f'{group}/{filename}.{extension.lower()}'
+                            file2lowercase(img_path)
+                        else:
+                            img_path = f'{group}/{filename}.{extension}'
+
                         image = cv2.imread(img_path)
                         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                         
                         # scaling from pixel to (0,1)
                         # true_landmarks = np.divide(true_landmarks, (image.shape[1], image.shape[0]))
-
-                        
 
                         # We crop only face detail for a better precision
                         # and accomodate landmark coordinates to cropped subimage
@@ -60,7 +70,6 @@ def prepare_training_landmarks(both_models = BOTH_MODELS):
                         # (unlike MediaPipe model)
                         # we have to flip their y-axis
                         true_landmarks[:,1] = 1 - true_landmarks[:,1]
-
 
                         if both_models:
                             input_landmarks = np.concatenate((MediaPipe_model(subimage), LBF_model(subimage)), axis = 0)
@@ -88,26 +97,31 @@ def prepare_training_landmarks(both_models = BOTH_MODELS):
 
 
 
-def save_preprocessed_data(x_inp, y_inp, path_list, angles, crops):
-    if not  os.path.exists('preprocessed_data'):
-        os.mkdir('preprocessed_data')
-    np.savez('preprocessed_data/preprocessed_inputs', x_inp = x_inp, y_inp = y_inp)
-    np.savez('preprocessed_data/angles', angles = angles)
-    np.savez('preprocessed_data/crops', crops = crops)
+def save_preprocessed_data(x_inp, y_inp, path_list, angles, crops, target_folder):
+    if not os.path.exists(target_folder):
+        os.mkdir(target_folder)
+    np.savez(f'{target_folder}/preprocessed_inputs', x_inp = x_inp, y_inp = y_inp)
+    np.savez(f'{target_folder}/angles', angles = angles)
+    np.savez(f'{target_folder}/crops', crops = crops)
     
-    with open("preprocessed_data/path_list.txt", "w") as pl:
+    with open(f'{target_folder}/path_list.txt', "w") as pl:
         for path in path_list:
             pl.write(str(path) +"\n")
 
 
-# if not os.path.isfile("preprocessed_data/path_list.txt"):  
-#     x_inp, y_inp, path_list, angles = prepare_training_landmarks()   
-#     try:
-#         print(x_inp.shape)
-#         print(y_inp.shape)
-#         print(len(path_list)) 
-#         print(angles.shape)
-#     except Exception as e:
-#         print(e)
-        
-#     save_preprocessed_data(x_inp, y_inp, path_list, angles)
+def preprocess_data(target_folder, data_folders):
+    if not os.path.isfile(f"{target_folder}/path_list.txt"):  
+        x_inp, y_inp, path_list, angles, crops = prepare_training_landmarks(root_dirs=data_folders)   
+        try:
+            print(x_inp.shape)
+            print(y_inp.shape)
+            print(len(path_list)) 
+            print(angles.shape)
+        except Exception as e:
+            print(e)
+            
+        save_preprocessed_data(x_inp, y_inp, path_list, angles, crops, target_folder)
+    else:
+        print("Preprocessed data already exist - delete them first!")
+
+preprocess_data(target_folder="preprocessed_data", data_folders=['AI_Morphometrics', 'PHABRNO_pro_ML'])
