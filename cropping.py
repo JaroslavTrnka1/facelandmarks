@@ -8,14 +8,14 @@ from facelandmarks.config import DEVICE, STANDARD_IMAGE_WIDTH
 
 def crop_around_centroid(image, centroid, size_measure):
    
-    subimage_center = torch.mul(centroid, torch.tensor([image.shape[1], image.shape[0]]).to(DEVICE))
-    subimage_size = torch.mul(size_measure, torch.tensor([image.shape[1], image.shape[0]]).to(DEVICE))
+    subimage_center = torch.mul(centroid, torch.tensor([image.shape[1], image.shape[0]]))
+    subimage_size = torch.mul(size_measure, torch.tensor([image.shape[1], image.shape[0]]))
 
     subimage_margins = torch.cat([-1 * torch.squeeze(subimage_center - subimage_size), torch.squeeze(subimage_center + subimage_size)])
-    image_margins = torch.tensor([0,0,image.shape[1], image.shape[0]]).to(DEVICE)
+    image_margins = torch.tensor([0,0,image.shape[1], image.shape[0]])
 
-    cropping = torch.max(torch.ones(4).to(DEVICE),image_margins - subimage_margins).type(torch.int)
-    padding = torch.abs(torch.min(torch.zeros(4).to(DEVICE),image_margins - subimage_margins)).type(torch.int)
+    cropping = torch.max(torch.ones(4),image_margins - subimage_margins).type(torch.int)
+    padding = torch.abs(torch.min(torch.zeros(4),image_margins - subimage_margins)).type(torch.int)
 
     padded_img = cv2.copyMakeBorder(image,padding[1].item(),padding[3].item(),padding[0].item(),padding[2].item(),cv2.BORDER_REPLICATE)
     subimage = np.ascontiguousarray(padded_img[cropping[1]:-cropping[3], cropping[0]:-cropping[2],:])
@@ -83,7 +83,7 @@ def get_subimage_shape(image_path, size_measure):
     except:
       image_path = '/'.join(image_path.split('/')[:-1]) + '/' + image_path.split('/')[-1].split('.')[0] + '.' + image_path.split('/')[-1].split('.')[1].lower()
       width, height = imagesize.get(image_path)
-    subimage_size = 2*torch.mul(size_measure, torch.tensor([width, height]).to(DEVICE)).squeeze()
+    subimage_size = 2*torch.mul(size_measure, torch.tensor([width, height])).squeeze()
     new_width = STANDARD_IMAGE_WIDTH
     scale = new_width / subimage_size[0]
     new_height = int(scale * subimage_size[1])
@@ -94,25 +94,25 @@ def get_subimage_shape(image_path, size_measure):
 def make_landmark_crops(raw_landmarks, image, crop_size):
 
     # Scaling from (0,1) to pixel scale and transposing landmarks
-    raw_landmarks_pix = torch.mul(raw_landmarks.reshape(-1,2), torch.tensor([image.shape[1], image.shape[0]]).to(DEVICE)).permute(1,0)
+    raw_landmarks_pix = torch.mul(raw_landmarks.reshape(-1,2), torch.tensor([image.shape[1], image.shape[0]])).permute(1,0)
     
     # Preparing index matrices of all crops
     crop_range = torch.arange(-crop_size // 2, crop_size // 2)
 
     # shape (30,30,2) --> one layer of horizontal indices from -15 to 14, second the same verical
-    crop_matrix = torch.stack([crop_range.tile((crop_size,1)), crop_range[:, None].tile((1,crop_size))], dim = 2).to(DEVICE)
+    crop_matrix = torch.stack([crop_range.tile((crop_size,1)), crop_range[:, None].tile((1,crop_size))], dim = 2)
 
     # shape: (x_coor_matrix horizontal, y_coor_matrix vertical, 2, num_landmarks)
     crop_indices = (raw_landmarks_pix[None, None,:,:] + crop_matrix[:,:,:,None]).type(torch.LongTensor) # float to int for indices
 
-    image = torch.tensor(image).to(DEVICE)
+    image = torch.tensor(image)
     
     # Cropping image around raw landmarks
     sub_image = image[crop_indices[:,:,1,:], crop_indices[:,:,0,:], :]
 
     # Final shape (3 for RGB * num_landmarks, x_crop_size, y_crop_size)
     # cnn in torch requires channels first
-    multicrop = sub_image.reshape(crop_size, crop_size, -1).permute(2,0,1).type(torch.float).to(DEVICE)
+    multicrop = sub_image.reshape(crop_size, crop_size, -1).permute(2,0,1).type(torch.float)
 
     return multicrop
 

@@ -78,10 +78,10 @@ class FaceDataset(Dataset):
     
     def __getitem__(self, idx):
         
-        x = torch.tensor(self.x[idx,:], dtype = torch.float).to(DEVICE)
-        y = torch.tensor(self.y_true[idx,:], dtype = torch.float).to(DEVICE)
+        x = torch.tensor(self.x[idx,:], dtype = torch.float)
+        y = torch.tensor(self.y_true[idx,:], dtype = torch.float)
         img_path = self.path_list[idx]
-        crops = torch.tensor(self.crops[idx], dtype = torch.int32).to(DEVICE)
+        crops = torch.tensor(self.crops[idx], dtype = torch.int32)
         
         relative_landmarks, centroid, size_measure = get_relative_positions(x.reshape(-1,2))
         relative_targets = fit_to_relative_centroid(y.reshape(-1,2), centroid, size_measure)
@@ -138,8 +138,8 @@ class FaceDataset(Dataset):
         #     return x, y, multicrop, subimage , image#, template_match
     
     def get_landmarks(self, idx):
-        x = torch.tensor(self.x[idx,:], dtype = torch.float).to(DEVICE)
-        y = torch.tensor(self.y_true[idx,:], dtype = torch.float).to(DEVICE)
+        x = torch.tensor(self.x[idx,:], dtype = torch.float)
+        y = torch.tensor(self.y_true[idx,:], dtype = torch.float)
         img_path = self.path_list[idx]
         
         relative_landmarks, centroid, size_measure = get_relative_positions(x.reshape(-1,2))
@@ -159,8 +159,8 @@ class FaceDataset(Dataset):
         
     # def get_gray_multicrop(self, idx, crop_size, gray = True, from_targets = True, work_with_image = False):
         
-    #     x = torch.tensor(self.x[idx,:], dtype = torch.float).to(DEVICE)
-    #     y = torch.tensor(self.y_true[idx,:], dtype = torch.float).to(DEVICE)
+    #     x = torch.tensor(self.x[idx,:], dtype = torch.float)
+    #     y = torch.tensor(self.y_true[idx,:], dtype = torch.float)
     #     img_path = self.path_list[idx]
         
     #     if from_targets:

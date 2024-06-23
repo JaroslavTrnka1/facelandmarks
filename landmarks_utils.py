@@ -180,7 +180,7 @@ def display_landmarks(landmarks, img, pixel_scale = False, origin = None, errors
 
 
 def get_relative_positions(landmarks):
-    margin_coef = torch.tensor([1.7, 1.85]).to(DEVICE)
+    margin_coef = torch.tensor([1.7, 1.85])
     
     # Calculate the mean absolute position of landmarks
     centroid = torch.mean(landmarks, axis=-2, keepdim=True)

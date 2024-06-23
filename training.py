@@ -13,6 +13,8 @@ from facelandmarks.cropping import *
 from facelandmarks.config import *
 from facelandmarks.face_landmarking_model import *
 from facelandmarks.face_dataset import *
+
+# from torch.cuda.amp import GradScaler, autocast
    
 def new_cache():
     cache = {}
@@ -125,6 +127,8 @@ def prepare_trainers(num_parent_landmarks = 5,
         num_cnn=num_cnn
         ).to(torch.float32).to(DEVICE)
     
+    # scaler = GradScaler() 
+    
     del(preparation_dataset)
     
     main_dataset = FaceDataset(model, rotate=rotate, crop_size=crop_size)#, subgroups=best_groups[:10])
@@ -161,6 +165,9 @@ def prepare_trainers(num_parent_landmarks = 5,
     
     return model, optimizers, schedulers, datasets, dataloaders
 
+
+# TODO!!!!
+# Moving to device must take place in batches, not the whole dataset!!!
 
 def train (model, 
            cache,
@@ -221,12 +228,22 @@ def train (model,
                 x = ensemble_inputs,
                 targets = ensemble_targets
             )
+            
+            # with autocast():
+            #     _, final_loss, raw_loss = model(
+            #         x=ensemble_inputs,
+            #         targets=ensemble_targets
+            #     )
                      
             cache['pretrain_cache'].append(final_loss.item())
             final_loss.backward()
+            # scaler.scale(final_loss).backward()
 
             for optimizer in actual_optimizers:
                 optimizer.step()
+            #     scaler.step(optimizer)
+                
+            # scaler.update()
             
             schedulers["ensemble"].step()
             
@@ -256,12 +273,14 @@ def train (model,
                 cache['time_cache']["dataset"].append(time() - start)
                 
                 start = time()
+                # with autocast():
                 _, final_loss, raw_loss = model(
                     inputs,
                     targets = targets,
                     multicrop = multicrop,
                     landmarks = landmarks
                 )
+
                 cache['time_cache']["model"].append(time() - start)
                 
                 
@@ -269,10 +288,15 @@ def train (model,
             
                 start = time()
                 final_loss.backward()
+                # scaler.scale(final_loss).backward()
                 cache['time_cache']["backward"].append(time() - start)
                 
                 print(f"Post-training epoch: {epoch}, final-loss: {final_loss.item()}, raw-loss: {raw_loss.item()}.", end="\r")
 
+                # for optimizer in actual_optimizers:
+                #     scaler.step(optimizer)
+                # scaler.update()
+                
                 for optimizer in actual_optimizers:
                     optimizer.step()
                 
@@ -285,6 +309,7 @@ def train (model,
                     batch = next(iter(dataloaders["test"]))
                     inputs, targets, multicrop, landmarks = batch
                     
+                    # with autocast():
                     _, total_loss, raw_loss = model(
                         x = inputs,
                         targets = targets,
