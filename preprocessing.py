@@ -62,7 +62,10 @@ def prepare_training_landmarks(both_models = BOTH_MODELS, group = None):
                     # and accomodate landmark coordinates to cropped subimage
                     # as well as to float (0,1) scale
                     subimage, xmin, ymin, xmax, ymax = crop_face_only(image)
-                    true_landmarks = np.subtract(true_landmarks, (xmin, image.shape[0] - ymax))
+                    # true_landmarks = np.subtract(true_landmarks, (xmin, image.shape[0] - ymax))
+                    # true_landmarks = np.divide(true_landmarks, (subimage.shape[1], subimage.shape[0]))
+                    
+                    subimage = image
                     true_landmarks = np.divide(true_landmarks, (subimage.shape[1], subimage.shape[0]))
                     # As the source true landmarks have y-origin on the bottom of picture
                     # (unlike MediaPipe model)
@@ -105,10 +108,10 @@ def save_preprocessed_data(x_inp, y_inp, path_list, angles, crops, target_folder
         already_saved_crops = np.load(f'{target_folder}/crops.npz')['crops']
         all_inputs = already_preprocessed['x_inp']
         all_targets = already_preprocessed['y_inp']
-        x_inp = np.concatenate((x_inp, all_inputs), axis = 0)
-        y_inp = np.concatenate((y_inp, all_targets), axis = 0)
-        angles = np.concatenate((angles, already_saved_angles))
-        crops = np.concatenate((crops, already_saved_crops), axis = 0)
+        x_inp = np.concatenate((all_inputs, x_inp), axis = 0)
+        y_inp = np.concatenate((all_targets, y_inp), axis = 0)
+        angles = np.concatenate((already_saved_angles, angles))
+        crops = np.concatenate((already_saved_crops, crops), axis = 0)
         
     np.savez(f'{target_folder}/preprocessed_inputs', x_inp = x_inp, y_inp = y_inp)
     np.savez(f'{target_folder}/angles', angles = angles)

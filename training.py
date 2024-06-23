@@ -14,7 +14,8 @@ from facelandmarks.config import *
 from facelandmarks.face_landmarking_model import *
 from facelandmarks.face_dataset import *
 
-# from torch.cuda.amp import GradScaler, autocast
+if 'cuda' in str(DEVICE):
+    from torch.cuda.amp import GradScaler, autocast
    
 def new_cache():
     cache = {}
@@ -75,7 +76,7 @@ def create_projection_mask(dataset, num_parent_landmarks = 5, inputs = True):
 
 def get_best_groups():
     # Prepare best groups for ensemble projection
-    groups = [os.path.basename(os.path.normpath(path_string)) for path_string in glob("./AI_Morphometrics/*/", recursive = False)]
+    groups = [os.path.basename(os.path.normpath(path_string)) for path_string in glob("./data/*/*", recursive = False)]
     groups_results = pd.read_json('training_results_means.json', orient='index')
     groups_results.columns = ['result']
     list_df = pd.read_csv('./preprocessed_data/path_list.txt', names=['text'], header=None)
@@ -127,22 +128,22 @@ def prepare_trainers(num_parent_landmarks = 5,
         num_cnn=num_cnn
         ).to(torch.float32).to(DEVICE)
     
-    # scaler = GradScaler() 
+    
+    scaler = GradScaler() 
     
     del(preparation_dataset)
     
     main_dataset = FaceDataset(model, rotate=rotate, crop_size=crop_size)#, subgroups=best_groups[:10])
-    main_dataloader = DataLoader(main_dataset, batch_size=100, shuffle=True)
+    main_dataloader = DataLoader(main_dataset, batch_size=50, shuffle=True)
     
     # TODO: rozdělit datasety
     test_dataset = FaceDataset(model, rotate=rotate, crop_size=crop_size)#, subgroups=best_groups[:10])
-    test_dataloader = DataLoader(test_dataset, batch_size=100, shuffle=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=50, shuffle=True)
 
     ensemble_dataset = []
     ensemble_dataloader = []
-    
     for group in range(projectors):
-        simple_dataset = FaceDataset(model, subgroups=[best_groups[group]], rotate=rotate)
+        simple_dataset = FaceDataset(model, rotate=rotate)#, subgroups=[best_groups[group]])
         ensemble_dataset.append(simple_dataset)
         ensemble_dataloader.append(DataLoader(simple_dataset, batch_size=200, sampler=EnsembleSampler(simple_dataset)))
     
@@ -163,11 +164,8 @@ def prepare_trainers(num_parent_landmarks = 5,
     datasets = {"main": main_dataset, "ensemble": ensemble_dataset, 'test': test_dataset}
     dataloaders = {"main": main_dataloader, "ensemble": ensemble_dataloader, 'test': test_dataloader}
     
-    return model, optimizers, schedulers, datasets, dataloaders
+    return model, optimizers, schedulers, datasets, dataloaders, scaler
 
-
-# TODO!!!!
-# Moving to device must take place in batches, not the whole dataset!!!
 
 def train (model, 
            cache,
@@ -180,7 +178,8 @@ def train (model,
            cnn_epochs = 0,
            ffn_epochs = 0,
            cnn_ffn_epochs = 0,
-           all_train_epochs = 0):
+           all_train_epochs = 0,
+           scaler = None):
      
     actual_optimizers = [optimizers["ensemble"]]
     TRAIN_PHASE = 0
@@ -218,6 +217,8 @@ def train (model,
             for data_loader in dataloaders["ensemble"]:
                 batch = next(iter(data_loader))
                 inputs, targets, _ = batch
+                inputs = inputs.to(DEVICE)
+                targets = targets.to(DEVICE)
                 ensemble_inputs.append(inputs)
                 ensemble_targets.append(targets)
             
@@ -241,7 +242,7 @@ def train (model,
 
             for optimizer in actual_optimizers:
                 optimizer.step()
-            #     scaler.step(optimizer)
+                # scaler.step(optimizer)
                 
             # scaler.update()
             
@@ -251,6 +252,8 @@ def train (model,
                 model.eval()
                 batch = next(iter(dataloaders["test"]))
                 inputs, targets, _ = batch
+                inputs = inputs.to(DEVICE)
+                targets = targets.to(DEVICE)
                 output = model.ensemble.predict(inputs)
 
                 criterion = nn.MSELoss()
@@ -270,35 +273,38 @@ def train (model,
                 #start = time()
                 #inputs, targets, multicrop = batch  
                 inputs, targets, multicrop, landmarks = batch  
+                inputs = inputs.to(DEVICE)
+                targets = targets.to(DEVICE)
+                multicrop = multicrop.to(DEVICE)
+                landmarks = landmarks.to(DEVICE)
                 cache['time_cache']["dataset"].append(time() - start)
                 
                 start = time()
-                # with autocast():
-                _, final_loss, raw_loss = model(
-                    inputs,
-                    targets = targets,
-                    multicrop = multicrop,
-                    landmarks = landmarks
-                )
+                with autocast():
+                    _, final_loss, raw_loss = model(
+                        inputs,
+                        targets = targets,
+                        multicrop = multicrop,
+                        landmarks = landmarks
+                    )
 
                 cache['time_cache']["model"].append(time() - start)
-                
                 
                 cache['main_cache'].append(final_loss.item())
             
                 start = time()
-                final_loss.backward()
-                # scaler.scale(final_loss).backward()
+                # final_loss.backward()
+                scaler.scale(final_loss).backward()
                 cache['time_cache']["backward"].append(time() - start)
                 
                 print(f"Post-training epoch: {epoch}, final-loss: {final_loss.item()}, raw-loss: {raw_loss.item()}.", end="\r")
 
-                # for optimizer in actual_optimizers:
-                #     scaler.step(optimizer)
-                # scaler.update()
-                
                 for optimizer in actual_optimizers:
-                    optimizer.step()
+                    scaler.step(optimizer)
+                scaler.update()
+                
+                # for optimizer in actual_optimizers:
+                #     optimizer.step()
                 
                 # cache['lr'].append(schedulers["cnn"].get_last_lr()[0])
                 # if model.train_phase == 1:
@@ -308,6 +314,10 @@ def train (model,
                     model.eval()
                     batch = next(iter(dataloaders["test"]))
                     inputs, targets, multicrop, landmarks = batch
+                    inputs = inputs.to(DEVICE)
+                    targets = targets.to(DEVICE)
+                    multicrop = multicrop.to(DEVICE)
+                    landmarks = landmarks.to(DEVICE)
                     
                     # with autocast():
                     _, total_loss, raw_loss = model(

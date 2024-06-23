@@ -29,6 +29,9 @@ class RawProjection(nn.Module):
 
         #x = self.linear1(x)
         #self.linear1.weight.data = self.linear1.weight * self.mask
+        if str(x.device).split(':')[0] != str(DEVICE):
+            # print(f'moving from{x.device} to {DEVICE}')
+            x = x.to(DEVICE)
         output = F.linear(x, self.linear2.weight*self.mask, bias=None)
 
         if targets == None:
@@ -82,7 +85,7 @@ class EnsembleProjection(nn.Module):
             output, loss = projector(x)
             outputs.append(output)
 
-        output = torch.mean(torch.stack(outputs, dim=0), dim=0)
+        output = torch.mean(torch.stack(outputs, dim=0), dim=0).to(DEVICE)
         
         return output
 

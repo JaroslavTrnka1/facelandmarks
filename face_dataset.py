@@ -20,8 +20,8 @@ class FaceDataset(Dataset):
                  ):
    
         preprocessed_inputs = np.load('preprocessed_data/preprocessed_inputs.npz')
-        all_angles = np.load('preprocessed_data/angles.npz')
-        all_crops = np.load('preprocessed_data/crops.npz')
+        all_angles = np.load('preprocessed_data/angles.npz')['angles']
+        all_crops = np.load('preprocessed_data/crops.npz')['crops']
         path_list = []
                 
         with open("preprocessed_data/path_list.txt", "r") as pl:
@@ -30,7 +30,8 @@ class FaceDataset(Dataset):
         
         all_inputs = preprocessed_inputs['x_inp']
         all_targets = preprocessed_inputs['y_inp']
-
+        # print(f'Inputs and targets has the same length: {all_inputs.shape[0] == all_targets.shape[0]}.')
+        # print(f'Crops and path_list have equal length: {len(path_list) == all_crops.shape[0]}')
         
         if subgroups:
             subgroups = list(subgroups)
@@ -46,14 +47,14 @@ class FaceDataset(Dataset):
                         subgroup_pathlist.append(path)
                         subgroup_x = np.concatenate((subgroup_x, all_inputs[i:i+1,:]), axis = 0)
                         subgroup_y_true = np.concatenate((subgroup_y_true, all_targets[i:i+1,:]), axis = 0)
-                        subgroup_angles = np.concatenate([subgroup_angles, all_angles['angles'][i:i+1]], axis = 0)
-                        subgroup_crops = np.concatenate([subgroup_crops, all_crops['crops'][i:i+1,:]], axis = 0)
+                        subgroup_angles = np.concatenate([subgroup_angles, all_angles[i:i+1]], axis = 0)
+                        subgroup_crops = np.concatenate([subgroup_crops, all_crops[i:i+1,:]], axis = 0)
         else:
             subgroup_x = all_inputs
             subgroup_y_true = all_targets
             subgroup_pathlist = path_list
-            subgroup_angles = all_angles['angles']
-            subgroup_crops = all_crops['crops']
+            subgroup_angles = all_angles
+            subgroup_crops = all_crops
         
         if BOTH_MODELS:
             self.x = subgroup_x
@@ -81,12 +82,12 @@ class FaceDataset(Dataset):
         x = torch.tensor(self.x[idx,:], dtype = torch.float)
         y = torch.tensor(self.y_true[idx,:], dtype = torch.float)
         img_path = self.path_list[idx]
-        crops = torch.tensor(self.crops[idx], dtype = torch.int32)
+        # crops = torch.tensor(self.crops[idx], dtype = torch.int32)
         
         relative_landmarks, centroid, size_measure = get_relative_positions(x.reshape(-1,2))
         relative_targets = fit_to_relative_centroid(y.reshape(-1,2), centroid, size_measure)
-        # subimage_shape = get_subimage_shape(img_path, size_measure)
-        subimage_shape = torch.tensor([crops[3] - crops[1], crops[2] - crops[0]])
+        subimage_shape = get_subimage_shape(img_path, size_measure)
+        # subimage_shape = torch.tensor([crops[3] - crops[1], crops[2] - crops[0]])
         
         if self.rotate:
             angle = self.angles[idx]
@@ -102,9 +103,9 @@ class FaceDataset(Dataset):
         else:
             image = cv2.imread(img_path)
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            subimage_first = np.ascontiguousarray(image[crops[1]:crops[3], crops[0]:crops[2], :])
+            # subimage_first = np.ascontiguousarray(image[crops[1]:crops[3], crops[0]:crops[2], :])
 
-            subimage = crop_around_centroid(subimage_first, centroid, size_measure)
+            subimage = crop_around_centroid(image, centroid, size_measure)
             subimage = standard_face_size(subimage)
             
             if self.rotate:
@@ -115,7 +116,7 @@ class FaceDataset(Dataset):
             if self.gray:
                 subimage = cv2.cvtColor(subimage, cv2.COLOR_BGR2GRAY)[:,:,None]
             
-            multicrop = normalize_multicrop(make_landmark_crops(raw_landmarks, subimage, self.crop_size))
+            multicrop = normalize_multicrop(make_landmark_crops(raw_landmarks.to('cpu'), subimage, self.crop_size))
 
             # multicrop = make_landmark_crops(y, subimage, self.crop_size)
 
@@ -123,7 +124,7 @@ class FaceDataset(Dataset):
                 return x, y, multicrop, raw_landmarks
             
             else:
-                return x, y, multicrop, image, subimage
+                return x, y, multicrop, image, subimage #, subimage_first
             
             # elif self.model.train_phase == 2:
             #     correction = self.model.cnn_ensemble.predict(multicrop, catenate=False)

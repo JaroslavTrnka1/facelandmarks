@@ -92,7 +92,7 @@ def get_subimage_shape(image_path, size_measure):
     
 @torch.no_grad()
 def make_landmark_crops(raw_landmarks, image, crop_size):
-
+    
     # Scaling from (0,1) to pixel scale and transposing landmarks
     raw_landmarks_pix = torch.mul(raw_landmarks.reshape(-1,2), torch.tensor([image.shape[1], image.shape[0]])).permute(1,0)
     

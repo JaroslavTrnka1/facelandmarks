@@ -221,15 +221,15 @@ def get_face_angle(landmarks, image_shape):
     return angle_deg.item()
 
 def rotate_landmarks(angle_deg, landmarks, image_shape):
-    center = torch.tensor([image_shape[1]//2, image_shape[0]//2], device=DEVICE)
-    pixel_landmarks = torch.mul(landmarks, torch.tensor([image_shape[1], image_shape[0]], device=DEVICE))
+    center = torch.tensor([image_shape[1]//2, image_shape[0]//2])#, device=DEVICE)
+    pixel_landmarks = torch.mul(landmarks, torch.tensor([image_shape[1], image_shape[0]]))#, device=DEVICE))
     rotation_matrix = cv2.getRotationMatrix2D((center[0].item(), center[1].item()), angle_deg, 1.0)
 
     centered_landmarks = pixel_landmarks - center
-    centered_landmarks = torch.matmul(centered_landmarks.type(torch.float), torch.tensor(rotation_matrix[:,:2], dtype=torch.float32, device=DEVICE).T)
+    centered_landmarks = torch.matmul(centered_landmarks.type(torch.float), torch.tensor(rotation_matrix[:,:2], dtype=torch.float32).T)
 
     rotated_landmarks = centered_landmarks + center
-    rotated_landmarks = torch.div(rotated_landmarks.type(torch.float), torch.tensor([image_shape[1], image_shape[0]], device=DEVICE))
+    rotated_landmarks = torch.div(rotated_landmarks.type(torch.float), torch.tensor([image_shape[1], image_shape[0]]))#, device=DEVICE))
     return rotated_landmarks
 
 def display_parent_landmarks(projection_mask, img_idx, landmark_idx, from_inputs = True):
