@@ -186,4 +186,4 @@ class GroupedTransformer(nn.Module):
             x = block(x)
         output = self.final_projection(x)
         output = torch.flatten(output.transpose(-1,-2), start_dim=-2)
-        return output / 50e7 # due to enormous loss error
+        return output / 50e5 # due to enormous loss error e7

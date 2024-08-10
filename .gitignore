@@ -19,3 +19,4 @@ preprocessed_data/haarcascade_frontalface_alt2.xml
 .ipynb_checkpoints/Face_Landmarking3-checkpoint.ipynb
 .ipynb_checkpoints/Face_Landmarking3-checkpoint.ipynb
 .ipynb_checkpoints/Face_Landmarking-checkpoint.ipynb
+*.json

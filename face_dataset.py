@@ -101,7 +101,10 @@ class FaceDataset(Dataset):
             return x, y, 0
 
         else:
-            image = cv2.imread(img_path)
+            if os.path.exists(img_path):
+                image = cv2.imread(img_path)
+            else:
+                image = cv2.imread('.'.join(img_path.split('.')[:-1]) + '.' + img_path.split('.')[-1].upper())
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             # subimage_first = np.ascontiguousarray(image[crops[1]:crops[3], crops[0]:crops[2], :])
 
@@ -142,6 +145,8 @@ class FaceDataset(Dataset):
         x = torch.tensor(self.x[idx,:], dtype = torch.float)
         y = torch.tensor(self.y_true[idx,:], dtype = torch.float)
         img_path = self.path_list[idx]
+        if not os.path.exists(img_path):
+            img_path = '.'.join(img_path.split('.')[:-1]) + '.' + img_path.split('.')[-1].upper()
         
         relative_landmarks, centroid, size_measure = get_relative_positions(x.reshape(-1,2))
         relative_targets = fit_to_relative_centroid(y.reshape(-1,2), centroid, size_measure)

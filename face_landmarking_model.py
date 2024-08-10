@@ -12,6 +12,27 @@ from facelandmarks.transformer_focusing import GroupedTransformer
 
 
 
+
+class WingLoss(nn.Module):
+    def __init__(self, width=5, curvature=0.5):
+        super(WingLoss, self).__init__()
+        self.width = width
+        self.curvature = curvature
+        self.C = self.width - self.width * np.log(1 + self.width / self.curvature)
+
+    def forward(self, prediction, target):
+        diff = target - prediction
+        diff_abs = diff.abs()
+        loss = diff_abs.clone()
+
+        idx_smaller = diff_abs < self.width
+        idx_bigger = diff_abs >= self.width
+
+        loss[idx_smaller] = self.width * torch.log(1 + diff_abs[idx_smaller] / self.curvature)
+        loss[idx_bigger]  = loss[idx_bigger] - self.C
+        loss = loss.mean()
+        return loss
+
 class RawProjection(nn.Module):
     def __init__(self, input_dim, output_dim, mask):
         super().__init__()
@@ -85,17 +106,17 @@ class EnsembleProjection(nn.Module):
             output, loss = projector(x)
             outputs.append(output)
 
-        output = torch.mean(torch.stack(outputs, dim=0), dim=0).to(DEVICE)
+        output = torch.mean(torch.stack(outputs, dim=0), dim=0)
         
         return output
 
 class CNNFocusing(nn.Module):
-    def __init__(self, kernel_sizes, activations = True, pooling = True, batch_norm = False, crop_size = 46, start_out_channels = 8):
+    def __init__(self, kernel_sizes, activations = True, pooling = True, batch_norm = False, crop_size = 46, start_out_channels = 8, hidden_per_lmark = 64):
         super().__init__()
         
         self.cnn = self.initialize_cnn(kernel_sizes, activations, pooling, start_out_channels=start_out_channels, batch_norm=batch_norm)
         cnn_output_size = self.calculate_output_size(crop_size, self.cnn)
-        hidden_per_lmark = 64
+        self.crop_size = crop_size
         mask_diag = torch.diag(torch.ones(72))
         linear1_mask = mask_diag.repeat_interleave(hidden_per_lmark, dim = 1).repeat_interleave(int(cnn_output_size), dim = 0)
         linear2_mask = mask_diag.repeat_interleave(2, dim = 1).repeat_interleave(hidden_per_lmark, dim = 0)
@@ -107,6 +128,10 @@ class CNNFocusing(nn.Module):
         self.linear2 = nn.Linear(linear2_mask.shape[0], linear2_mask.shape[1])
     
     def forward(self, x):
+        if x.shape[-1] != self.crop_size:
+            new_crop = x.shape[-1]
+            
+            x = x[...,int((new_crop - self.crop_size)/2): int((new_crop + self.crop_size)/2), int((new_crop - self.crop_size)/2): int((new_crop + self.crop_size)/2)]
         x = self.cnn(x)
         x = torch.flatten(x, -3)
         self.linear1.weight.data.mul_(self.mask1.permute(1,0))
@@ -161,11 +186,14 @@ class CNNFocusing(nn.Module):
             
 
 class EnsembleCNN(nn.Module):
-    def __init__(self, num_cnn, kernel_sizes, activations, pooling, batch_norm, crop_size, start_out_channels):
+    def __init__(self, num_cnn, kernel_sizes, activations, pooling, batch_norm, crop_size, start_out_channels, hidden_per_lmark, mixture = False):
         super().__init__()
         
         self.ensembleCNN = nn.ModuleList()
         self.num_cnn = num_cnn
+        
+        if not isinstance(crop_size, list):
+            crop_size = [crop_size] * num_cnn
         
         for i in range(num_cnn):
             cnn_focusing = CNNFocusing(
@@ -173,18 +201,36 @@ class EnsembleCNN(nn.Module):
                 activations=activations,
                 pooling=pooling[i],
                 batch_norm=batch_norm,
-                crop_size = crop_size,
-                start_out_channels=start_out_channels
+                crop_size = crop_size[i],
+                start_out_channels=start_out_channels,
+                hidden_per_lmark = hidden_per_lmark
                 )
             self.ensembleCNN.append(cnn_focusing)
-    
+        
+        if mixture:
+            self.router = nn.Parameter(torch.ones((144, self.num_cnn)))
+        else:
+            self.router = None
+        
     def forward(self, x, catenate = True):
-        output = self.ensembleCNN[0](x)
-        for cnn in self.ensembleCNN[1:]:
-            if catenate:
-                output = torch.cat([output, cnn(x)], dim = 1)
-            else:
-                output += cnn(x)
+        if self.router is not None:
+            normalized_router = torch.nn.functional.softmax(self.router, dim=-1)
+            weights = normalized_router[:,0]
+            output = torch.mul(self.ensembleCNN[0](x), weights)
+            for i, cnn in enumerate(self.ensembleCNN[1:]):
+                weights = normalized_router[:,i+1]
+                cnn_out = torch.mul(cnn(x), weights)
+                if catenate:
+                    output = torch.cat([output, cnn_out], dim = 1)
+                else:
+                    output += cnn_out
+        else:
+            output = self.ensembleCNN[0](x)
+            for cnn in self.ensembleCNN[1:]:
+                if catenate:
+                    output = torch.cat([output, cnn(x)], dim=1)
+                else:
+                    output += cnn(x)
         return output
     
     @torch.no_grad()
@@ -208,8 +254,15 @@ class FaceLandmarking(nn.Module):
                  start_out_channels=8,
                  ffn_projection_mask = None,
                  batch_norm = False,
-                 num_cnn = 4
+                 num_cnn = 4,
+                 wing_loss_width=5,
+                 hidden_per_lmark=64,
+                 mixture = None
                  ):
+
+        self.args = locals()
+        del self.args['self'] 
+        del self.args['__class__']
         
         super().__init__()
 
@@ -219,23 +272,28 @@ class FaceLandmarking(nn.Module):
             input_dim = 956
             
         self.ensemble = EnsembleProjection(input_dim, 144, projectors, projection_mask)
-        self.transformer_focusing = GroupedTransformer(crop_size=crop_size,
-                                               num_crops=72,
-                                               patch_size=5,
-                                               embed_dim=64,
-                                               num_heads=4,
-                                               num_blocks=4)
+
         cnn_pooling = []
         while len(cnn_pooling) < num_cnn:
             cnn_pooling.extend(pooling)
             cnn_pooling = cnn_pooling[:num_cnn]
-        # self.cnn_ensemble = EnsembleCNN(num_cnn=num_cnn,
-        #                                 kernel_sizes=kernel_sizes,
-        #                                 activations=activations,
-        #                                 pooling=cnn_pooling,
-        #                                 batch_norm=batch_norm,
-        #                                 crop_size = crop_size,
-        #                                 start_out_channels=start_out_channels)
+        if FOCUSING == 'CNN':
+            self.cnn_ensemble = EnsembleCNN(num_cnn=num_cnn,
+                                            kernel_sizes=kernel_sizes,
+                                            activations=activations,
+                                            pooling=cnn_pooling,
+                                            batch_norm=batch_norm,
+                                            crop_size = crop_size,
+                                            start_out_channels=start_out_channels,
+                                            hidden_per_lmark=hidden_per_lmark,
+                                            mixture=mixture)
+        else:
+            self.transformer_focusing = GroupedTransformer(crop_size=crop_size,
+                                                        num_crops=72,
+                                                        patch_size=5,
+                                                        embed_dim=64,
+                                                        num_heads=4,
+                                                        num_blocks=4)
             # self.cnn_ensemble2 = EnsembleCNN(num_cnn=num_cnn,
             #                                 kernel_sizes=kernel_sizes,
             #                                 activations=activations,
@@ -257,11 +315,16 @@ class FaceLandmarking(nn.Module):
             
         self.ffn = nn.Linear(self.ffn_projection_mask.shape[1], self.ffn_projection_mask.shape[0], bias=None)
         
-        self.loss_function = nn.MSELoss()
+        self.loss_function = None
         self.train_phase = 0
+        self.wing_loss_width=wing_loss_width
         
 
     def forward(self, x, targets, multicrop = None, landmarks = None):
+        if self.training:
+            self.loss_function = WingLoss(width = self.wing_loss_width)
+        else:
+            self.loss_function = nn.MSELoss()
 
         if self.train_phase == 0:
             outputs, losses = self.ensemble(x, targets)
@@ -276,9 +339,11 @@ class FaceLandmarking(nn.Module):
                 raw_landmarks = landmarks
                 raw_loss = self.loss_function(raw_landmarks, targets)
 
-            # correction = self.cnn_ensemble(multicrop, catenate=False)
+            try:
+                correction = self.cnn_ensemble(multicrop, catenate=False)
                 # correction = self.cnn_focusing(multicrop) + self.cnn_focusing2(multicrop) + self.cnn_focusing3(multicrop) + self.cnn_focusing4(multicrop)
-            correction = self.transformer_focusing(multicrop)
+            except:
+                correction = self.transformer_focusing(multicrop)
             output = raw_landmarks + correction
             final_loss = self.loss_function(output, targets)
             return output, final_loss, raw_loss
@@ -290,8 +355,10 @@ class FaceLandmarking(nn.Module):
             with torch.no_grad():
                 # raw_landmarks = self.ensemble.predict(x)
                 raw_loss = self.loss_function(raw_landmarks, targets)
-                # correction = self.cnn_ensemble(multicrop)
-                correction = self.transformer_focusing(multicrop)
+                try:
+                    correction = self.cnn_ensemble(multicrop, catenate=False)
+                except:
+                    correction = self.transformer_focusing(multicrop)
             
             # ffn_input = torch.cat((raw_landmarks, correction), dim = 1)
             
@@ -316,7 +383,7 @@ class FaceLandmarking(nn.Module):
             input_landmarks = MediaPipe_model(image)
         
         # Facedataset pathway    
-        input_landmarks = torch.from_numpy(input_landmarks).float().to(DEVICE)
+        input_landmarks = torch.from_numpy(input_landmarks).float()
         angle = get_face_angle(input_landmarks, image.shape)
         relative_landmarks, centroid, size_measure = get_relative_positions(input_landmarks)
         subimage = crop_around_centroid(image, centroid, size_measure)

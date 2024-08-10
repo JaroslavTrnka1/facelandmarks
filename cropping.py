@@ -78,11 +78,11 @@ def get_image_edges(image, threshold1=50, threshold2=150):
     return edges
 
 def get_subimage_shape(image_path, size_measure):
-    try:
-      width, height = imagesize.get(image_path)
-    except:
-      image_path = '/'.join(image_path.split('/')[:-1]) + '/' + image_path.split('/')[-1].split('.')[0] + '.' + image_path.split('/')[-1].split('.')[1].lower()
-      width, height = imagesize.get(image_path)
+    # try:
+    width, height = imagesize.get(image_path)
+    # except:
+    #   image_path = '/'.join(image_path.split('/')[:-1]) + '/' + image_path.split('/')[-1].split('.')[0] + '.' + image_path.split('/')[-1].split('.')[1].lower()
+    #   width, height = imagesize.get(image_path)
     subimage_size = 2*torch.mul(size_measure, torch.tensor([width, height])).squeeze()
     new_width = STANDARD_IMAGE_WIDTH
     scale = new_width / subimage_size[0]
