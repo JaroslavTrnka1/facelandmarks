@@ -47,7 +47,7 @@ def create_projection_mask(dataset, num_parent_landmarks = 5, inputs = True):
             cache=np.concatenate([cache, similarity_matrix], axis=2)
     avg_sim_matrix = np.mean(cache, axis = 2)
     mask = avg_sim_matrix < np.partition(avg_sim_matrix, num_parent_landmarks, axis=1)[:,num_parent_landmarks:num_parent_landmarks+1]
-    return torch.from_numpy(mask).repeat_interleave(2, dim = 0).repeat_interleave(2, dim=1)
+    return torch.from_numpy(mask).repeat_interleave(2, dim = 0).repeat_interleave(2, dim=1).to(torch.int8)
 
 # def create_template_mask(template_size, crop_size, gray=False, crop_as_template=False):
 #     if not gray:
@@ -102,13 +102,15 @@ def prepare_trainers(num_parent_landmarks = 5,
                      kernel_sizes = [3,3,3],
                      activations = True,
                      pooling = True,
+                     padding=0,
                      crop_size = 46,
                      batch_norm = False,
                      num_cnn = 5,
                      wing_loss_width=5,
                      cnn_crop_size = None,
                      hidden_per_lmark=64,
-                     mixture=None):
+                     mixture=None,
+                     top_head=None):
     
     seed = 42
     torch.manual_seed(seed)
@@ -134,29 +136,31 @@ def prepare_trainers(num_parent_landmarks = 5,
         kernel_sizes=kernel_sizes,
         activations=activations,
         pooling=pooling,
+        padding=padding,
         crop_size=cnn_crop_size,
         batch_norm = batch_norm,
         num_cnn=num_cnn,
         wing_loss_width=wing_loss_width,
         hidden_per_lmark=hidden_per_lmark,
-        mixture = mixture
-        ).to(torch.float32).to(DEVICE)
+        mixture = mixture,
+        top_head = top_head
+        ).to(torch.float32).to(DEVICE)  
     
     # scaler = GradScaler() 
-    
+    print('Model prepared...')
     del(preparation_dataset)
     
-    # base_dataset = FaceDataset(model, rotate=rotate, crop_size=crop_size)
-    # train_ratio = 0.85
-    # train_size = int(train_ratio * len(base_dataset))
-    # eval_size = len(base_dataset) - train_size
-    # main_dataset, test_dataset = random_split(base_dataset, [train_size, eval_size])
+    base_dataset = FaceDataset(model, rotate=rotate, crop_size=crop_size)
+    train_ratio = 0.95
+    train_size = int(train_ratio * len(base_dataset))
+    eval_size = len(base_dataset) - train_size
+    main_dataset, test_dataset = random_split(base_dataset, [train_size, eval_size])
     
-    test_dataset = FaceDataset(model, rotate=rotate, crop_size=crop_size)#, subgroups=best_groups[:10])
-    main_dataset = FaceDataset(model, rotate=rotate, crop_size=crop_size)#, subgroups=best_groups[:10])
+    # test_dataset = FaceDataset(model, rotate=rotate, crop_size=crop_size)#, subgroups=best_groups[:10])
+    # main_dataset = FaceDataset(model, rotate=rotate, crop_size=crop_size)#, subgroups=best_groups[:10])
     
-    main_dataloader = DataLoader(main_dataset, batch_size=200, shuffle=True)
-    test_dataloader = DataLoader(test_dataset, batch_size=200, shuffle=True)
+    main_dataloader = DataLoader(main_dataset, batch_size=100, shuffle=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=100, shuffle=True)
 
     ensemble_dataset = []
     ensemble_dataloader = []
@@ -164,24 +168,31 @@ def prepare_trainers(num_parent_landmarks = 5,
         simple_dataset = FaceDataset(model, rotate=rotate, subgroups=[best_groups[group]])
         ensemble_dataset.append(simple_dataset)
         ensemble_dataloader.append(DataLoader(simple_dataset, batch_size=200, sampler=EnsembleSampler(simple_dataset)))
+    print('Datsets prepared... preparing optimizers')
     
     ensemble_optimizer = torch.optim.Adam(model.ensemble.parameters(), lr = lr_projection)
-    if FOCUSING == 'CNN':
-        cnn_optimizer = torch.optim.Adam(model.cnn_ensemble.parameters(),lr = lr_cnn)
-    else:
-        cnn_optimizer = torch.optim.Adam(model.transformer_focusing.parameters(),lr = lr_cnn)
+    cnn_optimizer = torch.optim.Adam(model.focusing.parameters(),lr = lr_cnn)
 
     # cnn_optimizer2 = torch.optim.Adam(model.cnn_ensemble2.parameters(),lr = lr_cnn)
-    ffn_optimizer = torch.optim.Adam(model.ffn.parameters(), lr = lr_ffn)
+    if model.ffn is not None:
+        ffn_optimizer = torch.optim.Adam(model.ffn.parameters(), lr = lr_ffn)
+    else:
+        ffn_optimizer = None
     projection_scheduler = torch.optim.lr_scheduler.StepLR(ensemble_optimizer, step_size=1, gamma=0.98)
     # cnn_scheduler = torch.optim.lr_scheduler.StepLR(cnn_optimizer, step_size=1, gamma=0.99)
-    # cnn_scheduler = torch.optim.lr_scheduler.OneCycleLR(cnn_optimizer, max_lr=lr_cnn, steps_per_epoch=len(main_dataloader), epochs=30,anneal_strategy='linear')
+    # cnn_scheduler = torch.optim.lr_scheduler.OneCycleLR(cnn_optimizer, max_lr=lr_cnn, pct_start= 0.1, steps_per_epoch=len(main_dataloader), epochs=20,anneal_strategy='linear')
     cnn_scheduler1 = torch.optim.lr_scheduler.LinearLR(cnn_optimizer, start_factor = 0.1, end_factor = 1, total_iters = 10 * len(main_dataloader) // 10)
-    cnn_scheduler2 = torch.optim.lr_scheduler.LinearLR(cnn_optimizer, start_factor = 1, end_factor = 0.1, total_iters = 10*len(main_dataloader) - (10*len(main_dataloader)//10))
-    cnn_scheduler = torch.optim.lr_scheduler.SequentialLR(cnn_optimizer, schedulers=[cnn_scheduler1, cnn_scheduler2], milestones=[30 * len(main_dataloader) // 10])
-    
+    cnn_scheduler2 = torch.optim.lr_scheduler.LinearLR(cnn_optimizer, start_factor = 1, end_factor = 0.1, total_iters = 20*len(main_dataloader) - (20*len(main_dataloader)//10))
+    cnn_scheduler = torch.optim.lr_scheduler.SequentialLR(cnn_optimizer, schedulers=[cnn_scheduler1, cnn_scheduler2], milestones=[20 * len(main_dataloader) // 10])
+    if model.ffn is not None:
+        ffn_scheduler1 = torch.optim.lr_scheduler.LinearLR(ffn_optimizer, start_factor = 0.1, end_factor = 1, total_iters = 10 * len(main_dataloader) // 10)
+        ffn_scheduler2 = torch.optim.lr_scheduler.LinearLR(ffn_optimizer, start_factor = 1, end_factor = 0.1, total_iters = 10*len(main_dataloader) - (10*len(main_dataloader)//10))
+        ffn_scheduler = torch.optim.lr_scheduler.SequentialLR(ffn_optimizer, schedulers=[ffn_scheduler1, ffn_scheduler2], milestones=[10 * len(main_dataloader) // 10])
+    else:
+        ffn_scheduler = None
+        
     optimizers = {"ensemble": ensemble_optimizer, "cnn":cnn_optimizer,  "ffn":ffn_optimizer} #"cnn2":cnn_optimizer2,
-    schedulers = {"ensemble": projection_scheduler, "cnn": cnn_scheduler}
+    schedulers = {"ensemble": projection_scheduler, "cnn": cnn_scheduler, "ffn": ffn_scheduler}
     datasets = {"main": main_dataset, "ensemble": ensemble_dataset, 'test': test_dataset}
     dataloaders = {"main": main_dataloader, "ensemble": ensemble_dataloader, 'test': test_dataloader}
     
@@ -215,11 +226,13 @@ def train (model,
         if (epoch == pretrain_epochs) and ((cnn_epochs + ffn_epochs + cnn_ffn_epochs + all_train_epochs) > 0):
             PRETRAINING = False
             actual_optimizers = [optimizers["cnn"]]
+            scheduler = schedulers["cnn"]
             TRAIN_PHASE += 1
             print('\n Freezing raw_projection, training second module (CNN).')
 
         if (epoch == (pretrain_epochs + cnn_epochs)) and ((ffn_epochs + all_train_epochs) > 0):
             actual_optimizers = [optimizers["ffn"]]
+            scheduler = schedulers["ffn"]
             TRAIN_PHASE += 1
             print('\n Freezing second module, training top FFN.')
 
@@ -231,8 +244,10 @@ def train (model,
             actual_optimizers = [optimizers["ensemble"], optimizers["cnn"], optimizers["ffn"]]
             print('\n Training all parameters.')
 
-        datasets["main"].pretraining = PRETRAINING
-        datasets["test"].pretraining = PRETRAINING
+        datasets["main"].dataset.pretraining = PRETRAINING
+        datasets["test"].dataset.pretraining = PRETRAINING
+        # datasets["main"].pretraining = PRETRAINING
+        # datasets["test"].pretraining = PRETRAINING
         model.train_phase = TRAIN_PHASE
      
         if PRETRAINING:
@@ -291,16 +306,19 @@ def train (model,
         else:
             start = time()
             for iteration, batch in enumerate(dataloaders["main"]):
+                model.train()
                 for optimizer in actual_optimizers:
                     optimizer.zero_grad()
                 
                 #start = time()
                 #inputs, targets, multicrop = batch  
-                inputs, targets, multicrop, landmarks = batch  
+                inputs, targets, multicrop, landmarks, heatmaps, image_sizes = batch  
                 inputs = inputs.to(DEVICE)
                 targets = targets.to(DEVICE)
                 multicrop = multicrop.to(DEVICE)
                 landmarks = landmarks.to(DEVICE)
+                heatmaps = heatmaps.to(DEVICE)
+                image_sizes = image_sizes.to(DEVICE)
                 cache['time_cache']["dataset"].append(time() - start)
                 
                 start = time()
@@ -309,7 +327,9 @@ def train (model,
                     inputs,
                     targets = targets,
                     multicrop = multicrop,
-                    landmarks = landmarks
+                    landmarks = landmarks,
+                    heatmaps_true = heatmaps,
+                    image_sizes = image_sizes
                 )
 
                 cache['time_cache']["model"].append(time() - start)
@@ -334,31 +354,36 @@ def train (model,
                 for optimizer in actual_optimizers:
                     optimizer.step()
                 
-                cache['lr'].append(schedulers["cnn"].get_last_lr()[0])
+                cache['lr'].append(scheduler.get_last_lr()[0])
                 if model.train_phase == 1:
-                    schedulers["cnn"].step()    
+                    scheduler.step()    
                 
-                if iteration % 2 == 0:
+                if iteration % 5 == 0:
                     model.eval()
                     batch = next(iter(dataloaders["test"]))
-                    inputs, targets, multicrop, landmarks = batch
+                    inputs, targets, multicrop, landmarks, heatmaps, image_sizes = batch  
                     inputs = inputs.to(DEVICE)
                     targets = targets.to(DEVICE)
                     multicrop = multicrop.to(DEVICE)
                     landmarks = landmarks.to(DEVICE)
+                    heatmaps = heatmaps.to(DEVICE)
+                    image_sizes = image_sizes.to(DEVICE)
                     
                     # with autocast():
                     _, total_loss, raw_loss = model(
                         x = inputs,
                         targets = targets,
                         multicrop = multicrop,
-                        landmarks = landmarks
+                        landmarks = landmarks,
+                        heatmaps_true = heatmaps,
+                        image_sizes = image_sizes
                     )
                     
                     cache['test_cache'].append(total_loss.item())
                     cache['improvements_cache'].append(raw_loss.item() - total_loss.item())
                     model.train()
-                    #print(f"Training epoch: {epoch}, test-loss: {total_loss.item()}.")
+                    print('')
+                    print(f"Training epoch: {epoch}, improvement: {raw_loss.item() - total_loss.item()}, final loss: {total_loss.item()}, raw loss: {raw_loss.item()}.")
                     
                 start = time()
                 # if iteration == 0 and epoch % 2 == 0:

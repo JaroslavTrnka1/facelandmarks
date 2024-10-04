@@ -116,6 +116,22 @@ def make_landmark_crops(raw_landmarks, image, crop_size):
 
     return multicrop
 
+@torch.no_grad()
+def get_landmark_crop_position_unbatched(raw_landmarks, true_landmarks, image, crop_size, return_float = True):
+    
+    # Scaling from (0,1) to pixel scale and transposing landmarks
+    raw_landmarks_pix = torch.mul(raw_landmarks.reshape(-1,2), torch.tensor([image.shape[1], image.shape[0]]))
+    true_landmarks_pix = torch.mul(true_landmarks.reshape(-1,2), torch.tensor([image.shape[1], image.shape[0]]))
+    
+    differences_pix = raw_landmarks_pix - true_landmarks_pix
+    
+    if not return_float:
+        return differences_pix.type(torch.int16) + int(crop_size//2)
+    
+    else:
+        return torch.div(differences_pix, crop_size).type(torch.int16) + 0.5
+    
+    
 def normalize_multicrop(multicrop):
     if multicrop.shape[0] == 72:
         unstacked_multicrop = torch.unflatten(multicrop, 0, (-1, 1))  # shape (72,1,height, width)
@@ -151,3 +167,93 @@ def template_matching(multicrop, avg_template, template_method, crop_as_template
 
     # TODO: Remove magic constant
     return torch.from_numpy(0.001 * matches/255).squeeze().type(torch.float32)
+
+
+def create_heatmaps_from_crop_landmarks(landmarks_coords, crop_size, sigma=None):
+    """
+    Create ground truth heatmaps for multiple landmarks.
+    
+    Parameters:
+    - landmarks_coords: tensor of shape (num_landmarks, 2) containing (x, y) coordinates of landmarks.
+    - heatmap_size: int
+    - sigma: standard deviation for the Gaussian (controls spread of the heatmaps).
+    
+    Returns:
+    - A 3D tensor of shape (num_landmarks, height, width) representing the heatmaps.
+    """
+    sigma = crop_size//30
+    num_landmarks = landmarks_coords.shape[0]
+    
+    # Initialize an empty tensor to hold the heatmaps for all landmarks
+    heatmaps = torch.zeros((num_landmarks, crop_size, crop_size))
+    
+    # Create a grid of (x, y) coordinates representing each pixel location in the heatmap
+    xx, yy = torch.meshgrid(torch.arange(crop_size), torch.arange(crop_size))
+    xx = xx.T  # Transpose to match the (height, width) format
+    yy = yy.T
+    
+    for i, (x, y) in enumerate(landmarks_coords):
+        # Calculate the 2D Gaussian distribution centered at (x, y) for each landmark
+        gaussian = torch.exp(- ((xx - x)**2 + (yy - y)**2) / (2 * sigma**2))
+        # Normalize the Gaussian so that the peak value is 1 (optional)
+        gaussian /= gaussian.max()
+        # Store the heatmap for this landmark
+        heatmaps[i] = gaussian
+    return heatmaps
+
+
+def create_true_heatmaps(raw_landmarks, true_landmarks, image, crop_size):
+    crop_positions = get_landmark_crop_position_unbatched(raw_landmarks, true_landmarks, image, crop_size, return_float=False)   # (num_landmarks, 2)
+    heatmaps = create_heatmaps_from_crop_landmarks(crop_positions, crop_size)
+    return heatmaps
+
+# Batched function
+def get_crop_center_preds_from_heatmap_batch(heatmap):
+
+    # maxm = torch.nn.MaxPool2d(3, 1, 1)(heatmap)
+    # maxm = torch.eq(maxm, heatmap).float()
+    # heatmap = heatmap * maxm
+    
+    # h = heatmap.size()[2]
+    # w = heatmap.size()[3]
+    # heatmap = heatmap.view(heatmap.size()[0], heatmap.size()[1], -1)
+    # val_k, ind = heatmap.topk(1, dim=2)
+
+    # x = ind % w
+    # y = (ind / w).long()
+    # ind_k = torch.stack((x, y), dim=3)
+    
+    max, idx = torch.max(
+        heatmap.view(heatmap.size(0), heatmap.size(1), heatmap.size(2) * heatmap.size(3)), 2)
+    idx += 1
+    preds = idx.view(idx.size(0), idx.size(1), 1).repeat(1, 1, 2).float()
+    preds[..., 0].apply_(lambda x: (x - 1) % heatmap.size(3))# + 1)
+    preds[..., 1].add_(-1).div_(heatmap.size(2)).floor_()#.add_(1)
+
+    # for i in range(preds.size(0)):
+    #     for j in range(preds.size(1)):
+    #         hm_ = heatmap[i, j, :]
+    #         pX, pY = int(preds[i, j, 0]) - 1, int(preds[i, j, 1]) - 1
+    #         if pX > 0 and pX < 63 and pY > 0 and pY < 63:
+    #             diff = torch.FloatTensor(
+    #                 [hm_[pY, pX + 1] - hm_[pY, pX - 1],
+    #                  hm_[pY + 1, pX] - hm_[pY - 1, pX]])
+    #             preds[i, j].add_(diff.sign_().mul_(.25))
+
+    # preds.add_(1)
+    preds.sub_(torch.tensor(heatmap.size()[2:]) // 2)
+    return preds
+
+# Batched function
+def get_image_correction_from_heatmap(heatmaps, image_shapes):
+    # heatmaps of shape (batch, 72, width, heigt) or (batch, stack, 72, width, height)
+    if len(heatmaps.shape) == 5:
+        heatmaps = heatmaps[:,-1,...]
+    # image_shapes of shape (batch, 2)
+    # crop predictions of shape (batch, num_landmarks, 2)
+    image_shapes = image_shapes.unsqueeze(-2)
+    crop_predictions = get_crop_center_preds_from_heatmap_batch(heatmaps)
+    image_correction = torch.div(crop_predictions, image_shapes)
+    return image_correction.reshape(-1,144)
+
+

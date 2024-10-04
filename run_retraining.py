@@ -14,6 +14,9 @@ from facelandmarks.face_landmarking_model import *
 from facelandmarks.training import *
 import itertools
 
+# TODO: load model with args
+
+
 results = {}
 projectors = [3]
 rotations = [True]
@@ -22,15 +25,10 @@ start_out_channels = [16]
 num_parents = [10]
 ffn_bias = [False]
 kernel_sizes = [[5,3,3]]
-# Pooling must have the same length!!! or not a list!!!
-# pooling = [['max', 'avg', 'max']]  
-# pooling = [['max', 'avg', None, None]]
-pooling = [['max', 'avg']]
-padding = 0
-
-num_cnn = [6]
+pooling = [['max', 'avg']]  
+num_cnn = [5]
 # wing_loss_width = [1,2,10]
-cnn_crop_size = [[72, 64, 56, 48, 40, 32]]
+cnn_crop_size = [[70, 64, 56, 48, 40]]
 crop_size = max([max(x) for x in cnn_crop_size])
 hidden_per_lmark = [64]
 
@@ -63,14 +61,12 @@ for lr, num_parent_landmarks, num_cnn, start_out_channels, ffn_bias, kernel_size
                                                                             kernel_sizes=kernel_sizes,
                                                                             activations=False,
                                                                             pooling=pooling,
-                                                                            padding=padding,
                                                                             crop_size=crop_size,
                                                                             batch_norm=False,
                                                                             num_cnn=num_cnn,
                                                                             cnn_crop_size = cnn_crop_size,
                                                                             hidden_per_lmark=hidden_per_lmark,
-                                                                            mixture = False,
-                                                                            top_head = 'None'
+                                                                            mixture = False
                                                                             )
     
     
@@ -84,7 +80,7 @@ for lr, num_parent_landmarks, num_cnn, start_out_channels, ffn_bias, kernel_size
                             dataloaders, 
                             pretrain_epochs=170, #170
                             cnn_epochs=20,
-                            ffn_epochs=0,
+                            ffn_epochs=10,
                             all_train_epochs=0,
                             logger_path = logger_path,
                             combination = combination

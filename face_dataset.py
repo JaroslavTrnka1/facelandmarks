@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 import cv2
 import numpy as np
 
-from facelandmarks.cropping import standard_face_size, make_landmark_crops, crop_around_centroid, rotate_image, get_subimage_shape, normalize_multicrop, template_matching
+from facelandmarks.cropping import standard_face_size, make_landmark_crops, crop_around_centroid, rotate_image, get_subimage_shape, normalize_multicrop, create_true_heatmaps
 from facelandmarks.config import *
 from facelandmarks.landmarks_utils import *
 
@@ -120,27 +120,35 @@ class FaceDataset(Dataset):
                 subimage = cv2.cvtColor(subimage, cv2.COLOR_BGR2GRAY)[:,:,None]
             
             multicrop = normalize_multicrop(make_landmark_crops(raw_landmarks.to('cpu'), subimage, self.crop_size))
+            
+            # Ve chvíli, kdy půjde o heatmaps, bude třeba vracet target heatmaps, image_size
+            # tedy:x, heatmaps, multicrop, raw_landmarks 
 
             # multicrop = make_landmark_crops(y, subimage, self.crop_size)
-
-            if not self.work:
-                return x, y, multicrop, raw_landmarks
+            if self.model.train_phase == 1:
+                if self.work:
+                    return x, y, multicrop, image, subimage
+                
+                else:
+                    if self.model.heatmaps:
+                        heatmaps = create_true_heatmaps(raw_landmarks.to('cpu'), y, subimage, self.crop_size)
+                    else:
+                        heatmaps = 0
+                    
+                    # print(x.shape, y.shape, multicrop.shape, raw_landmarks.shape)    
+                    return x, y, multicrop, raw_landmarks, heatmaps, torch.tensor([subimage.shape[1], subimage.shape[0]])
             
-            else:
-                return x, y, multicrop, image, subimage #, subimage_first
-            
-            # elif self.model.train_phase == 2:
-            #     correction = self.model.cnn_ensemble.predict(multicrop, catenate=False)
-            #     landmarks  = raw_landmarks + correction
-            #     multicrop2 = normalize_multicrop(make_landmark_crops(landmarks, subimage, self.crop_size))
-            #     return x, y, multicrop2, landmarks
-            
-        
-        # if not self.work:
-        #     return x, y, multicrop #, multicrop, subimage, image
-        # else:
-        #     return x, y, multicrop, subimage , image#, template_match
-    
+            elif self.model.train_phase == 2:
+                catenate = (self.model.top_head == 'ffn-catenate')
+                correction = self.model.cnn_ensemble.predict(multicrop, catenate=catenate)
+                if catenate:
+                    landmarks = torch.cat((raw_landmarks, correction), dim = 1)
+                    multicrop2 = multicrop
+                else:
+                    landmarks  = raw_landmarks + correction
+                    multicrop2 = normalize_multicrop(make_landmark_crops(landmarks, subimage, self.crop_size))
+                return x, y, multicrop2, landmarks
+                
     def get_landmarks(self, idx):
         x = torch.tensor(self.x[idx,:], dtype = torch.float)
         y = torch.tensor(self.y_true[idx,:], dtype = torch.float)
@@ -163,51 +171,6 @@ class FaceDataset(Dataset):
         
         return x, y     
         
-    # def get_gray_multicrop(self, idx, crop_size, gray = True, from_targets = True, work_with_image = False):
-        
-    #     x = torch.tensor(self.x[idx,:], dtype = torch.float)
-    #     y = torch.tensor(self.y_true[idx,:], dtype = torch.float)
-    #     img_path = self.path_list[idx]
-        
-    #     if from_targets:
-    #         relative_targets, centroid, size_measure = get_relative_positions(y.reshape(-1,2))
-    #     else:
-    #         relative_landmarks, centroid, size_measure = get_relative_positions(x.reshape(-1,2))
-    #         relative_targets = fit_to_relative_centroid(y.reshape(-1,2), centroid, size_measure)
-            
-    #     subimage_shape = get_subimage_shape(img_path, size_measure)
-        
-    #     if self.rotate: 
-    #         angle = self.angles[idx]
-    #         relative_targets = rotate_landmarks(angle, relative_targets, subimage_shape)
-    #         if not from_targets:
-    #             relative_landmarks = rotate_landmarks(angle, relative_landmarks, subimage_shape)
-                
-    #     if not from_targets:
-    #         x = relative_landmarks.reshape(x.shape)
-    #     y = relative_targets.reshape(y.shape)
-
-    #     image = cv2.imread(img_path)
-    #     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-    #     subimage = crop_around_centroid(image, centroid, size_measure)
-    #     subimage = standard_face_size(subimage)
-        
-    #     if self.rotate:
-    #         subimage = rotate_image(angle, subimage)
-        
-    #     if gray:       
-    #         subimage = cv2.cvtColor(subimage, cv2.COLOR_BGR2GRAY)[:,:,None]
-
-    #     if from_targets:
-    #         multicrop = make_landmark_crops(y, subimage, crop_size)
-    #     else:
-    #         multicrop = make_landmark_crops(x, subimage, crop_size)
-            
-    #     if not work_with_image:
-    #         return x, y, multicrop
-    #     else:
-    #         return x, y, multicrop, subimage , image   
     
 class EnsembleSampler:
     def __init__(self, dataset):
